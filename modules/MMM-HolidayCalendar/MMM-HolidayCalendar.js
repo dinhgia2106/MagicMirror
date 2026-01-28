@@ -527,9 +527,10 @@ Module.register("MMM-HolidayCalendar", {
             }
         };
 
-        // Touch scroll with momentum
+        // Touch scroll with momentum - immediate response
         holidayList.addEventListener('touchstart', (e) => {
             e.stopPropagation();
+            e.preventDefault(); // Prevent browser delay for immediate drag response
             stopMomentum();
             isDragging = true;
             startY = e.touches[0].clientY;
@@ -537,8 +538,6 @@ Module.register("MMM-HolidayCalendar", {
             scrollStart = holidayList.scrollTop;
             lastTime = Date.now();
             velocity = 0;
-            // Disable smooth scrolling during drag for immediate response
-            holidayList.style.scrollBehavior = 'auto';
         }, { passive: false });
 
         holidayList.addEventListener('touchmove', (e) => {
@@ -568,8 +567,6 @@ Module.register("MMM-HolidayCalendar", {
             if (Math.abs(velocity) > 1) {
                 applyMomentum();
             }
-            // Re-enable smooth scrolling
-            holidayList.style.scrollBehavior = 'smooth';
         }, { passive: false });
 
         // Mouse scroll (drag) with momentum
@@ -583,7 +580,6 @@ Module.register("MMM-HolidayCalendar", {
             lastTime = Date.now();
             velocity = 0;
             holidayList.style.cursor = 'grabbing';
-            holidayList.style.scrollBehavior = 'auto';
         });
 
         holidayList.addEventListener('mousemove', (e) => {
@@ -615,7 +611,6 @@ Module.register("MMM-HolidayCalendar", {
             if (Math.abs(velocity) > 1) {
                 applyMomentum();
             }
-            holidayList.style.scrollBehavior = 'smooth';
         });
 
         holidayList.addEventListener('mouseleave', (e) => {
@@ -628,7 +623,6 @@ Module.register("MMM-HolidayCalendar", {
                     applyMomentum();
                 }
             }
-            holidayList.style.scrollBehavior = 'smooth';
         });
 
         // Mouse wheel scroll - already smooth via CSS

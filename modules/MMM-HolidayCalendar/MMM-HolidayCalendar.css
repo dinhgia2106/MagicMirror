@@ -143,7 +143,7 @@
     background: #ffffff;
 }
 
-/* Holiday List - Scrollable with smooth effect */
+/* Holiday List - Scrollable with immediate drag response */
 .holiday-list {
     padding-top: 12px;
     border-top: 1px solid rgba(255, 255, 255, 0.2);
@@ -151,12 +151,9 @@
     height: 120px;
     overflow-y: scroll;
     overflow-x: hidden;
-    /* Enable smooth touch scrolling with momentum */
-    -webkit-overflow-scrolling: touch;
-    scroll-behavior: smooth;
     overscroll-behavior: contain;
-    /* Allow vertical scroll gestures */
-    touch-action: pan-y;
+    /* Disable browser touch handling for immediate JS drag response */
+    touch-action: none;
     cursor: grab;
 }
 
