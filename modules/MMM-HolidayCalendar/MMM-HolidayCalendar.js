@@ -494,7 +494,7 @@ Module.register("MMM-HolidayCalendar", {
     },
 
     setupHolidayListEvents: function (holidayList) {
-        // State for scroll handling with momentum
+        // State for scroll handling with smooth momentum (like month swipe)
         let isDragging = false;
         let startY = 0;
         let scrollStart = 0;
@@ -511,11 +511,11 @@ Module.register("MMM-HolidayCalendar", {
             }
         };
 
-        // Apply momentum scrolling with deceleration
+        // Apply smooth momentum scrolling - like iOS/native scroll feel
         const applyMomentum = () => {
-            // Deceleration factor (higher = faster stop)
-            const friction = 0.95;
-            const minVelocity = 0.5;
+            // Lower friction = longer, smoother scroll (0.97 feels like native)
+            const friction = 0.97;
+            const minVelocity = 0.1;
 
             velocity *= friction;
 
@@ -548,9 +548,9 @@ Module.register("MMM-HolidayCalendar", {
             const currentTime = Date.now();
             const deltaTime = currentTime - lastTime;
 
-            // Calculate velocity
+            // Calculate velocity with higher multiplier for sensitivity
             if (deltaTime > 0) {
-                velocity = (lastY - currentY) / deltaTime * 16; // Normalize to ~60fps
+                velocity = (lastY - currentY) / deltaTime * 25; // Higher = more sensitive to light swipes
             }
 
             const deltaY = startY - currentY;
@@ -563,8 +563,8 @@ Module.register("MMM-HolidayCalendar", {
         holidayList.addEventListener('touchend', (e) => {
             e.stopPropagation();
             isDragging = false;
-            // Apply momentum when finger is released
-            if (Math.abs(velocity) > 1) {
+            // Apply momentum with very low threshold - light swipes trigger scroll
+            if (Math.abs(velocity) > 0.3) {
                 applyMomentum();
             }
         }, { passive: false });
@@ -591,9 +591,9 @@ Module.register("MMM-HolidayCalendar", {
             const currentTime = Date.now();
             const deltaTime = currentTime - lastTime;
 
-            // Calculate velocity
+            // Calculate velocity with higher multiplier for sensitivity
             if (deltaTime > 0) {
-                velocity = (lastY - currentY) / deltaTime * 16;
+                velocity = (lastY - currentY) / deltaTime * 25;
             }
 
             const deltaY = startY - currentY;
@@ -607,8 +607,8 @@ Module.register("MMM-HolidayCalendar", {
             e.stopPropagation();
             isDragging = false;
             holidayList.style.cursor = 'grab';
-            // Apply momentum
-            if (Math.abs(velocity) > 1) {
+            // Apply momentum with low threshold
+            if (Math.abs(velocity) > 0.3) {
                 applyMomentum();
             }
         });
@@ -618,8 +618,8 @@ Module.register("MMM-HolidayCalendar", {
             if (isDragging) {
                 isDragging = false;
                 holidayList.style.cursor = 'grab';
-                // Apply momentum even when leaving
-                if (Math.abs(velocity) > 1) {
+                // Apply momentum with low threshold
+                if (Math.abs(velocity) > 0.3) {
                     applyMomentum();
                 }
             }
