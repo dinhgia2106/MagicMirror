@@ -47,6 +47,42 @@ Module.register("MMM-HolidayCalendar", {
         "Children's Day": "Ngày Quốc tế Thiếu nhi"
     },
 
+    // Extra international holidays popular in Vietnam (fixed dates)
+    // Format: { month: day } or { month: [day1, day2] }
+    extraHolidaysVi: [
+        { month: 1, day: 1, name: "Tết Dương lịch" },
+        { month: 2, day: 14, name: "Lễ tình nhân" },
+        { month: 3, day: 8, name: "Quốc tế Phụ nữ" },
+        { month: 4, day: 1, name: "Cá tháng Tư" },
+        { month: 4, day: 22, name: "Ngày Trái Đất" },
+        { month: 5, day: 1, name: "Quốc tế Lao động" },
+        { month: 6, day: 1, name: "Quốc tế Thiếu nhi" },
+        { month: 6, day: 21, name: "Ngày của Cha" },
+        { month: 10, day: 20, name: "Ngày Phụ nữ VN" },
+        { month: 10, day: 31, name: "Halloween" },
+        { month: 11, day: 20, name: "Ngày Nhà giáo VN" },
+        { month: 12, day: 24, name: "Đêm Giáng sinh" },
+        { month: 12, day: 25, name: "Giáng sinh" },
+        { month: 12, day: 31, name: "Đêm Giao thừa" }
+    ],
+
+    extraHolidaysEn: [
+        { month: 1, day: 1, name: "New Year's Day" },
+        { month: 2, day: 14, name: "Valentine's Day" },
+        { month: 3, day: 8, name: "Women's Day" },
+        { month: 4, day: 1, name: "April Fools' Day" },
+        { month: 4, day: 22, name: "Earth Day" },
+        { month: 5, day: 1, name: "Labour Day" },
+        { month: 6, day: 1, name: "Children's Day" },
+        { month: 6, day: 21, name: "Father's Day" },
+        { month: 10, day: 20, name: "VN Women's Day" },
+        { month: 10, day: 31, name: "Halloween" },
+        { month: 11, day: 20, name: "VN Teacher's Day" },
+        { month: 12, day: 24, name: "Christmas Eve" },
+        { month: 12, day: 25, name: "Christmas" },
+        { month: 12, day: 31, name: "New Year's Eve" }
+    ],
+
     start: function () {
         Log.info("Starting module: " + this.name);
         this.holidays = {};
@@ -59,8 +95,35 @@ Module.register("MMM-HolidayCalendar", {
         this.dragStartX = 0;
         this.currentOffset = 0;
 
+        // Add extra holidays first
+        this.addExtraHolidays();
+
         this.loadHolidays();
         this.scheduleUpdate();
+    },
+
+    addExtraHolidays: function () {
+        const isVi = this.config.language === "vi";
+        const extraList = isVi ? this.extraHolidaysVi : this.extraHolidaysEn;
+        const currentYear = this.currentDate.getFullYear();
+
+        // Add for current year and next year
+        [currentYear, currentYear + 1].forEach(year => {
+            extraList.forEach(h => {
+                const dateKey = `${year}-${String(h.month).padStart(2, '0')}-${String(h.day).padStart(2, '0')}`;
+                if (!this.holidays[dateKey]) {
+                    this.holidays[dateKey] = [];
+                }
+                // Check if this holiday already exists
+                const exists = this.holidays[dateKey].some(existing => existing.name === h.name);
+                if (!exists) {
+                    this.holidays[dateKey].push({
+                        name: h.name,
+                        isExtra: true
+                    });
+                }
+            });
+        });
     },
 
     getStyles: function () {
