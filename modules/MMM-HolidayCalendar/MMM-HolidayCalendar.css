@@ -286,20 +286,3 @@
 .lunar-face .day-cell.today {
     background: rgba(255, 212, 59, 0.3);
 }
-
-/* Mode indicator hint */
-.holiday-calendar-wrapper::after {
-    content: '';
-    position: absolute;
-    top: 8px;
-    right: 8px;
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: rgba(255, 255, 255, 0.5);
-    transition: background 0.3s ease;
-}
-
-.holiday-calendar-wrapper.show-lunar::after {
-    background: #ffd43b;
-}
