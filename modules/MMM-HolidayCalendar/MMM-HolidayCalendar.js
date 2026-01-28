@@ -1,6 +1,7 @@
 /* MMM-HolidayCalendar
  * A grid-style desk calendar module for MagicMirror²
  * Supports Vietnamese holidays and touch gestures for month navigation
+ * Infinity scroll carousel style
  */
 
 Module.register("MMM-HolidayCalendar", {
@@ -8,9 +9,8 @@ Module.register("MMM-HolidayCalendar", {
         calendarUrl: "https://www.officeholidays.com/ics/vietnam",
         fetchInterval: 7 * 24 * 60 * 60 * 1000, // 7 days
         language: "vi", // "vi" for Vietnamese, "en" for English
-        showWeekNumbers: false,
         highlightToday: true,
-        animationSpeed: 300,
+        panelWidth: 280, // Width of each month panel
     },
 
     // Vietnamese day names
@@ -54,9 +54,10 @@ Module.register("MMM-HolidayCalendar", {
         this.viewDate = new Date();
         this.loaded = false;
 
-        // Touch handling
-        this.touchStartX = 0;
-        this.touchEndX = 0;
+        // Drag state
+        this.isDragging = false;
+        this.dragStartX = 0;
+        this.currentOffset = 0;
 
         this.loadHolidays();
         this.scheduleUpdate();
@@ -76,18 +77,38 @@ Module.register("MMM-HolidayCalendar", {
             return wrapper;
         }
 
-        // Build calendar
-        wrapper.appendChild(this.buildHeader());
-        wrapper.appendChild(this.buildCalendar());
-        wrapper.appendChild(this.buildHolidayList());
+        // Create carousel container
+        const viewport = document.createElement("div");
+        viewport.className = "calendar-viewport";
+
+        const track = document.createElement("div");
+        track.className = "calendar-track";
+
+        // Build 3 panels: prev, current, next
+        const prevDate = new Date(this.viewDate);
+        prevDate.setMonth(prevDate.getMonth() - 1);
+
+        const nextDate = new Date(this.viewDate);
+        nextDate.setMonth(nextDate.getMonth() + 1);
+
+        track.appendChild(this.buildPanel(prevDate, "prev"));
+        track.appendChild(this.buildPanel(this.viewDate, "current"));
+        track.appendChild(this.buildPanel(nextDate, "next"));
+
+        viewport.appendChild(track);
+        wrapper.appendChild(viewport);
 
         // Add touch event listeners
-        this.addTouchListeners(wrapper);
+        this.addTouchListeners(wrapper, track);
 
         return wrapper;
     },
 
-    buildHeader: function () {
+    buildPanel: function (date, position) {
+        const panel = document.createElement("div");
+        panel.className = "calendar-panel " + position;
+
+        // Header
         const header = document.createElement("div");
         header.className = "calendar-header";
 
@@ -96,19 +117,21 @@ Module.register("MMM-HolidayCalendar", {
 
         const monthYear = document.createElement("div");
         monthYear.className = "month-year";
-        monthYear.innerHTML = `${monthNames[this.viewDate.getMonth()]} ${this.viewDate.getFullYear()}`;
-
-        const navHint = document.createElement("div");
-        navHint.className = "nav-hint";
-        navHint.innerHTML = isVi ? "Vuốt để đổi tháng" : "Swipe to change month";
+        monthYear.innerHTML = `${monthNames[date.getMonth()]} ${date.getFullYear()}`;
 
         header.appendChild(monthYear);
-        header.appendChild(navHint);
+        panel.appendChild(header);
 
-        return header;
+        // Calendar grid
+        panel.appendChild(this.buildCalendarGrid(date));
+
+        // Holiday list
+        panel.appendChild(this.buildHolidayList(date));
+
+        return panel;
     },
 
-    buildCalendar: function () {
+    buildCalendarGrid: function (viewDate) {
         const calendar = document.createElement("div");
         calendar.className = "calendar-grid";
 
@@ -129,17 +152,14 @@ Module.register("MMM-HolidayCalendar", {
         calendar.appendChild(dayHeader);
 
         // Get calendar data
-        const year = this.viewDate.getFullYear();
-        const month = this.viewDate.getMonth();
+        const year = viewDate.getFullYear();
+        const month = viewDate.getMonth();
         const firstDay = new Date(year, month, 1);
         const lastDay = new Date(year, month + 1, 0);
         const startDay = firstDay.getDay();
         const daysInMonth = lastDay.getDate();
-
-        // Previous month days
         const prevMonthLastDay = new Date(year, month, 0).getDate();
 
-        // Build weeks
         let dayCount = 1;
         let nextMonthDay = 1;
 
@@ -154,15 +174,12 @@ Module.register("MMM-HolidayCalendar", {
                 const cellIndex = week * 7 + dayOfWeek;
 
                 if (cellIndex < startDay) {
-                    // Previous month
                     const prevDay = prevMonthLastDay - startDay + cellIndex + 1;
                     dayCell.textContent = prevDay;
                     dayCell.classList.add("other-month");
                 } else if (dayCount <= daysInMonth) {
-                    // Current month
                     dayCell.textContent = dayCount;
 
-                    // Check if today
                     if (this.config.highlightToday &&
                         year === this.currentDate.getFullYear() &&
                         month === this.currentDate.getMonth() &&
@@ -170,20 +187,16 @@ Module.register("MMM-HolidayCalendar", {
                         dayCell.classList.add("today");
                     }
 
-                    // Check if holiday
                     const dateKey = this.getDateKey(year, month, dayCount);
                     if (this.holidays[dateKey]) {
                         dayCell.classList.add("holiday");
-                        dayCell.title = this.holidays[dateKey].map(h => h.name).join(", ");
                     }
 
-                    // Sunday/Saturday styling
                     if (dayOfWeek === 0) dayCell.classList.add("sunday");
                     if (dayOfWeek === 6) dayCell.classList.add("saturday");
 
                     dayCount++;
                 } else {
-                    // Next month
                     dayCell.textContent = nextMonthDay;
                     dayCell.classList.add("other-month");
                     nextMonthDay++;
@@ -193,31 +206,25 @@ Module.register("MMM-HolidayCalendar", {
             }
 
             calendar.appendChild(weekRow);
-
-            // Stop if we've finished the month and started next
             if (dayCount > daysInMonth && week >= 4) break;
         }
 
         return calendar;
     },
 
-    buildHolidayList: function () {
+    buildHolidayList: function (viewDate) {
         const listContainer = document.createElement("div");
         listContainer.className = "holiday-list";
 
-        const year = this.viewDate.getFullYear();
-        const month = this.viewDate.getMonth();
+        const year = viewDate.getFullYear();
+        const month = viewDate.getMonth();
 
-        // Get holidays for current view month
         const monthHolidays = [];
         for (let day = 1; day <= 31; day++) {
             const dateKey = this.getDateKey(year, month, day);
             if (this.holidays[dateKey]) {
                 this.holidays[dateKey].forEach(holiday => {
-                    monthHolidays.push({
-                        day: day,
-                        ...holiday
-                    });
+                    monthHolidays.push({ day: day, ...holiday });
                 });
             }
         }
@@ -226,11 +233,11 @@ Module.register("MMM-HolidayCalendar", {
             const noHoliday = document.createElement("div");
             noHoliday.className = "no-holiday";
             noHoliday.textContent = this.config.language === "vi"
-                ? "Không có ngày lễ trong tháng này"
-                : "No holidays this month";
+                ? "Không có ngày lễ"
+                : "No holidays";
             listContainer.appendChild(noHoliday);
         } else {
-            monthHolidays.forEach(holiday => {
+            monthHolidays.slice(0, 3).forEach(holiday => {
                 const item = document.createElement("div");
                 item.className = "holiday-item";
 
@@ -246,79 +253,111 @@ Module.register("MMM-HolidayCalendar", {
                 item.appendChild(nameSpan);
                 listContainer.appendChild(item);
             });
+
+            if (monthHolidays.length > 3) {
+                const more = document.createElement("div");
+                more.className = "holiday-more";
+                more.textContent = `+${monthHolidays.length - 3} ${this.config.language === "vi" ? "ngày khác" : "more"}`;
+                listContainer.appendChild(more);
+            }
         }
 
         return listContainer;
     },
 
-    addTouchListeners: function (wrapper) {
+    addTouchListeners: function (wrapper, track) {
         const self = this;
-        const threshold = 50;
+        const panelWidth = this.config.panelWidth;
 
+        const updatePosition = (offset, animate) => {
+            track.style.transition = animate ? 'transform 0.3s ease' : 'none';
+            track.style.transform = `translateX(${-panelWidth + offset}px)`;
+        };
+
+        // Initialize position (show middle panel)
+        updatePosition(0, false);
+
+        // Touch events
         wrapper.addEventListener("touchstart", function (e) {
-            self.touchStartX = e.changedTouches[0].screenX;
+            self.isDragging = true;
+            self.dragStartX = e.changedTouches[0].screenX;
+            self.currentOffset = 0;
+            track.style.transition = 'none';
+        }, { passive: true });
+
+        wrapper.addEventListener("touchmove", function (e) {
+            if (self.isDragging) {
+                self.currentOffset = e.changedTouches[0].screenX - self.dragStartX;
+                updatePosition(self.currentOffset, false);
+            }
         }, { passive: true });
 
         wrapper.addEventListener("touchend", function (e) {
-            self.touchEndX = e.changedTouches[0].screenX;
-            self.handleSwipe();
+            if (self.isDragging) {
+                self.isDragging = false;
+                self.handleDragEnd(track, panelWidth);
+            }
         }, { passive: true });
 
-        // Mouse support for testing
-        let mouseDown = false;
+        // Mouse events
         wrapper.addEventListener("mousedown", function (e) {
-            mouseDown = true;
-            self.touchStartX = e.screenX;
+            self.isDragging = true;
+            self.dragStartX = e.screenX;
+            self.currentOffset = 0;
+            track.style.transition = 'none';
+            e.preventDefault();
+        });
+
+        wrapper.addEventListener("mousemove", function (e) {
+            if (self.isDragging) {
+                self.currentOffset = e.screenX - self.dragStartX;
+                updatePosition(self.currentOffset, false);
+            }
         });
 
         wrapper.addEventListener("mouseup", function (e) {
-            if (mouseDown) {
-                self.touchEndX = e.screenX;
-                self.handleSwipe();
-                mouseDown = false;
+            if (self.isDragging) {
+                self.isDragging = false;
+                self.handleDragEnd(track, panelWidth);
             }
         });
 
         wrapper.addEventListener("mouseleave", function () {
-            mouseDown = false;
+            if (self.isDragging) {
+                self.isDragging = false;
+                self.handleDragEnd(track, panelWidth);
+            }
         });
     },
 
-    handleSwipe: function () {
-        const diff = this.touchEndX - this.touchStartX;
-        const threshold = 50;
+    handleDragEnd: function (track, panelWidth) {
+        const threshold = panelWidth * 0.3; // 30% of panel width to trigger change
 
-        if (Math.abs(diff) > threshold) {
-            if (diff > 0) {
-                // Swipe right - previous month
-                this.prevMonth();
-            } else {
-                // Swipe left - next month
-                this.nextMonth();
-            }
+        if (this.currentOffset > threshold) {
+            // Go to previous month
+            track.style.transition = 'transform 0.3s ease';
+            track.style.transform = `translateX(0px)`;
+
+            setTimeout(() => {
+                this.viewDate.setMonth(this.viewDate.getMonth() - 1);
+                this.updateDom(0);
+            }, 300);
+        } else if (this.currentOffset < -threshold) {
+            // Go to next month
+            track.style.transition = 'transform 0.3s ease';
+            track.style.transform = `translateX(${-panelWidth * 2}px)`;
+
+            setTimeout(() => {
+                this.viewDate.setMonth(this.viewDate.getMonth() + 1);
+                this.updateDom(0);
+            }, 300);
+        } else {
+            // Snap back to current
+            track.style.transition = 'transform 0.3s ease';
+            track.style.transform = `translateX(${-panelWidth}px)`;
         }
-    },
 
-    prevMonth: function () {
-        this.viewDate.setMonth(this.viewDate.getMonth() - 1);
-        this.refreshCalendar();
-    },
-
-    nextMonth: function () {
-        this.viewDate.setMonth(this.viewDate.getMonth() + 1);
-        this.refreshCalendar();
-    },
-
-    refreshCalendar: function () {
-        // Update DOM directly without flash
-        const wrapper = document.getElementById("holiday-calendar-" + this.identifier);
-        if (wrapper) {
-            wrapper.innerHTML = '';
-            wrapper.appendChild(this.buildHeader());
-            wrapper.appendChild(this.buildCalendar());
-            wrapper.appendChild(this.buildHolidayList());
-            this.addTouchListeners(wrapper);
-        }
+        this.currentOffset = 0;
     },
 
     getDateKey: function (year, month, day) {
@@ -338,35 +377,28 @@ Module.register("MMM-HolidayCalendar", {
             self.loadHolidays();
         }, this.config.fetchInterval);
 
-        // Update current date at midnight
         const now = new Date();
         const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
         const msUntilMidnight = tomorrow - now;
 
         setTimeout(function () {
             self.currentDate = new Date();
-            self.updateDom(self.config.animationSpeed);
-            // Then update every 24 hours
+            self.updateDom(0);
             setInterval(function () {
                 self.currentDate = new Date();
-                self.updateDom(self.config.animationSpeed);
+                self.updateDom(0);
             }, 24 * 60 * 60 * 1000);
         }, msUntilMidnight);
     },
 
     translateHolidayName: function (name) {
         if (this.config.language !== "vi") return name;
-
-        // Remove "Vietnam: " prefix
         name = name.replace(/^Vietnam:\s*/i, "");
-
-        // Check for direct translation
         for (const [en, vi] of Object.entries(this.holidayTranslations)) {
             if (name.toLowerCase().includes(en.toLowerCase())) {
                 return vi;
             }
         }
-
         return name;
     },
 
@@ -394,7 +426,6 @@ Module.register("MMM-HolidayCalendar", {
                 currentEvent = null;
             } else if (currentEvent) {
                 if (line.startsWith("DTSTART")) {
-                    // Handle both DTSTART:20260216 and DTSTART;VALUE=DATE:20260216
                     const match = line.match(/(\d{4})(\d{2})(\d{2})/);
                     if (match) {
                         currentEvent.date = `${match[1]}-${match[2]}-${match[3]}`;
@@ -412,20 +443,21 @@ Module.register("MMM-HolidayCalendar", {
         if (notification === "HOLIDAYS_FETCHED" && payload.id === this.identifier) {
             this.holidays = this.parseICS(payload.data);
             this.loaded = true;
-            this.updateDom(this.config.animationSpeed);
+            this.updateDom(0);
         } else if (notification === "FETCH_ERROR" && payload.id === this.identifier) {
             Log.error("Error fetching holidays:", payload.error);
             this.loaded = true;
-            this.updateDom(this.config.animationSpeed);
+            this.updateDom(0);
         }
     },
 
     notificationReceived: function (notification, payload, sender) {
-        // Handle touch module integration
         if (notification === "TOUCH_SWIPE_LEFT") {
-            this.nextMonth();
+            this.viewDate.setMonth(this.viewDate.getMonth() + 1);
+            this.updateDom(0);
         } else if (notification === "TOUCH_SWIPE_RIGHT") {
-            this.prevMonth();
+            this.viewDate.setMonth(this.viewDate.getMonth() - 1);
+            this.updateDom(0);
         }
     }
 });
