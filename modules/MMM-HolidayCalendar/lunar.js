@@ -286,6 +286,19 @@ var LunarCalendar = (function () {
         return can + ' ' + chi;
     }
 
+    var lunarHolidays = [
+        { day: 30, month: 12, name: "Giao thừa" },
+        { day: 1, month: 1, name: "Mùng 1 Tết" },
+        { day: 2, month: 1, name: "Mùng 2 Tết" },
+        { day: 3, month: 1, name: "Mùng 3 Tết" },
+        { day: 15, month: 1, name: "Rằm tháng Giêng" },
+        { day: 10, month: 3, name: "Giỗ Tổ Hùng Vương" },
+        { day: 5, month: 5, name: "Tết Đoan Ngọ" },
+        { day: 15, month: 7, name: "Lễ Vu Lan" },
+        { day: 15, month: 8, name: "Tết Trung Thu" },
+        { day: 23, month: 12, name: "Ông Công Ông Táo" }
+    ];
+
     // Public API
     return {
         /**
@@ -314,6 +327,13 @@ var LunarCalendar = (function () {
          * Get Can Chi for a specific Julian Day
          */
         getDayCanChi: getDayCanChi,
+
+        /**
+         * Get list of fixed lunar holidays
+         */
+        getHolidays: function () {
+            return lunarHolidays;
+        },
 
         /**
          * Check if a lunar date is Tet (Mung 1, 2, 3)

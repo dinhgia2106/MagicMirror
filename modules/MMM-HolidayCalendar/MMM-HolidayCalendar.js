@@ -31,15 +31,12 @@ Module.register("MMM-HolidayCalendar", {
 
     // Vietnamese lunar month names (1-12)
     lunarMonthNames: [
-        "Gieng", "Hai", "Ba", "Tu", "Nam", "Sau",
-        "Bay", "Tam", "Chin", "Muoi", "Mot", "Chap"
+        "Giêng", "Hai", "Ba", "Tư", "Năm", "Sáu",
+        "Bảy", "Tám", "Chín", "Mười", "Mười Một", "Chạp"
     ],
 
     // Holiday name translations
     holidayTranslations: {
-        "Tet Eve": "Giao thừa",
-        "Tet Nguyen Dan": "Tết Nguyên Đán",
-        "Tet Holiday": "Nghỉ Tết",
         "Hung Kings Temple Festival": "Giỗ Tổ Hùng Vương",
         "Reunification Day": "Ngày Thống nhất",
         "Labour Day": "Ngày Quốc tế Lao động",
@@ -193,39 +190,18 @@ Module.register("MMM-HolidayCalendar", {
 
         const currentYear = this.currentDate.getFullYear();
 
-        // Define lunar holidays: { lunarMonth, lunarDay, name }
-        const lunarHolidays = [
-            { lm: 1, ld: 1, name: "Mung 1 Tet" },
-            { lm: 1, ld: 2, name: "Mung 2 Tet" },
-            { lm: 1, ld: 3, name: "Mung 3 Tet" },
-            { lm: 3, ld: 10, name: "Gio To Hung Vuong" },
-            { lm: 8, ld: 15, name: "Tet Trung Thu" },
-            { lm: 1, ld: 15, name: "Ram thang Gieng" },
-            { lm: 7, ld: 15, name: "Vu Lan" }
-        ];
+        // Define lunar holidays from library
+        const lunarHolidays = LunarCalendar.getHolidays();
 
         // Check surrounding lunar years
         [currentYear - 1, currentYear, currentYear + 1].forEach(lunarYear => {
             lunarHolidays.forEach(h => {
-                const solar = LunarCalendar.getSolarDate(h.ld, h.lm, lunarYear, false);
+                const solar = LunarCalendar.getSolarDate(h.day, h.month, lunarYear, false);
                 if (solar && solar.day > 0) {
                     const dateKey = this.getDateKey(solar.year, solar.month - 1, solar.day);
                     this.addHoliday(dateKey, h.name);
                 }
             });
-
-            // Special case: Giao Thua (day before Mung 1 Tet)
-            const tetDay = LunarCalendar.getSolarDate(1, 1, lunarYear, false);
-            if (tetDay && tetDay.day > 0) {
-                // Get the day before Tet
-                const giaoThuaDate = new Date(tetDay.year, tetDay.month - 1, tetDay.day - 1);
-                const dateKey = this.getDateKey(
-                    giaoThuaDate.getFullYear(),
-                    giaoThuaDate.getMonth(),
-                    giaoThuaDate.getDate()
-                );
-                this.addHoliday(dateKey, "Giao Thua");
-            }
         });
     },
 
@@ -254,7 +230,7 @@ Module.register("MMM-HolidayCalendar", {
         wrapper.id = "holiday-calendar-" + this.identifier;
 
         if (!this.loaded) {
-            wrapper.innerHTML = '<div class="loading">Dang tai...</div>';
+            wrapper.innerHTML = '<div class="loading">Đang tải...</div>';
             return wrapper;
         }
 
@@ -305,61 +281,8 @@ Module.register("MMM-HolidayCalendar", {
         const holidayList = this.buildHolidayList(currentSolarDate);
         wrapper.appendChild(holidayList);
 
-        // Stop touch events from propagating to carousel
-        holidayList.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
-        holidayList.addEventListener('touchmove', (e) => e.stopPropagation(), { passive: true });
-        holidayList.addEventListener('touchend', (e) => e.stopPropagation(), { passive: true });
-        holidayList.addEventListener('mousedown', (e) => e.stopPropagation());
-        holidayList.addEventListener('mousemove', (e) => e.stopPropagation());
-        holidayList.addEventListener('mouseup', (e) => e.stopPropagation());
-
-        // Manual touch/drag scroll for holiday list
-        let isScrolling = false;
-        let startY = 0;
-        let scrollTop = 0;
-
-        holidayList.addEventListener('touchstart', (e) => {
-            isScrolling = true;
-            startY = e.touches[0].pageY;
-            scrollTop = holidayList.scrollTop;
-        }, { passive: true });
-
-        holidayList.addEventListener('touchmove', (e) => {
-            if (!isScrolling) return;
-            const y = e.touches[0].pageY;
-            const walk = startY - y;
-            holidayList.scrollTop = scrollTop + walk;
-        }, { passive: true });
-
-        holidayList.addEventListener('touchend', () => {
-            isScrolling = false;
-        }, { passive: true });
-
-        // Mouse drag scroll
-        holidayList.addEventListener('mousedown', (e) => {
-            isScrolling = true;
-            startY = e.pageY;
-            scrollTop = holidayList.scrollTop;
-            holidayList.style.cursor = 'grabbing';
-        });
-
-        holidayList.addEventListener('mousemove', (e) => {
-            if (!isScrolling) return;
-            e.preventDefault();
-            const y = e.pageY;
-            const walk = startY - y;
-            holidayList.scrollTop = scrollTop + walk;
-        });
-
-        holidayList.addEventListener('mouseup', () => {
-            isScrolling = false;
-            holidayList.style.cursor = 'grab';
-        });
-
-        holidayList.addEventListener('mouseleave', () => {
-            isScrolling = false;
-            holidayList.style.cursor = 'grab';
-        });
+        // Setup scroll events for holiday list
+        this.setupHolidayListEvents(holidayList);
 
         // Add touch event listeners for BOTH carousels
         const solarTrack = wrapper.querySelector('.solar-face .calendar-track');
@@ -402,7 +325,7 @@ Module.register("MMM-HolidayCalendar", {
             if (lunarInfo) {
                 const monthName = this.lunarMonthNames[lunarInfo.month - 1];
                 const canChi = LunarCalendar.getYearCanChi(lunarInfo.year);
-                monthYear.innerHTML = `Thang ${monthName} - ${canChi}`;
+                monthYear.innerHTML = `Tháng ${monthName} - ${canChi}`;
             }
         } else {
             // Solar mode
@@ -544,7 +467,7 @@ Module.register("MMM-HolidayCalendar", {
             const noHoliday = document.createElement("div");
             noHoliday.className = "no-holiday";
             noHoliday.textContent = this.config.language === "vi"
-                ? "Khong co ngay le"
+                ? "Không có ngày lễ"
                 : "No holidays";
             listContainer.appendChild(noHoliday);
         } else {
@@ -571,61 +494,65 @@ Module.register("MMM-HolidayCalendar", {
     },
 
     setupHolidayListEvents: function (holidayList) {
-        // Stop touch events from propagating to carousel
-        holidayList.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
-        holidayList.addEventListener('touchmove', (e) => e.stopPropagation(), { passive: true });
-        holidayList.addEventListener('touchend', (e) => e.stopPropagation(), { passive: true });
-        holidayList.addEventListener('mousedown', (e) => e.stopPropagation());
-        holidayList.addEventListener('mousemove', (e) => e.stopPropagation());
-        holidayList.addEventListener('mouseup', (e) => e.stopPropagation());
-
-        // Manual touch/drag scroll for holiday list
-        let isScrolling = false;
+        // State for scroll handling
+        let isDragging = false;
         let startY = 0;
-        let scrollTop = 0;
+        let scrollStart = 0;
 
+        // Touch scroll
         holidayList.addEventListener('touchstart', (e) => {
-            isScrolling = true;
-            startY = e.touches[0].pageY;
-            scrollTop = holidayList.scrollTop;
-        }, { passive: true });
+            e.stopPropagation();
+            isDragging = true;
+            startY = e.touches[0].clientY;
+            scrollStart = holidayList.scrollTop;
+        }, { passive: false });
 
         holidayList.addEventListener('touchmove', (e) => {
-            if (!isScrolling) return;
-            const y = e.touches[0].pageY;
-            const walk = startY - y;
-            holidayList.scrollTop = scrollTop + walk;
-        }, { passive: true });
+            e.stopPropagation();
+            if (!isDragging) return;
+            const deltaY = startY - e.touches[0].clientY;
+            holidayList.scrollTop = scrollStart + deltaY;
+        }, { passive: false });
 
-        holidayList.addEventListener('touchend', () => {
-            isScrolling = false;
-        }, { passive: true });
+        holidayList.addEventListener('touchend', (e) => {
+            e.stopPropagation();
+            isDragging = false;
+        }, { passive: false });
 
-        // Mouse drag scroll
+        // Mouse scroll (drag)
         holidayList.addEventListener('mousedown', (e) => {
-            isScrolling = true;
-            startY = e.pageY;
-            scrollTop = holidayList.scrollTop;
+            e.stopPropagation();
+            isDragging = true;
+            startY = e.clientY;
+            scrollStart = holidayList.scrollTop;
             holidayList.style.cursor = 'grabbing';
         });
 
         holidayList.addEventListener('mousemove', (e) => {
-            if (!isScrolling) return;
+            e.stopPropagation();
+            if (!isDragging) return;
             e.preventDefault();
-            const y = e.pageY;
-            const walk = startY - y;
-            holidayList.scrollTop = scrollTop + walk;
+            const deltaY = startY - e.clientY;
+            holidayList.scrollTop = scrollStart + deltaY;
         });
 
-        holidayList.addEventListener('mouseup', () => {
-            isScrolling = false;
+        holidayList.addEventListener('mouseup', (e) => {
+            e.stopPropagation();
+            isDragging = false;
             holidayList.style.cursor = 'grab';
         });
 
-        holidayList.addEventListener('mouseleave', () => {
-            isScrolling = false;
+        holidayList.addEventListener('mouseleave', (e) => {
+            e.stopPropagation();
+            isDragging = false;
             holidayList.style.cursor = 'grab';
         });
+
+        // Mouse wheel scroll
+        holidayList.addEventListener('wheel', (e) => {
+            e.stopPropagation();
+            holidayList.scrollTop += e.deltaY;
+        }, { passive: true });
     },
 
     addTouchListeners: function (wrapper, solarTrack, lunarTrack) {
@@ -806,14 +733,19 @@ Module.register("MMM-HolidayCalendar", {
                 currentEvent = {};
             } else if (line === "END:VEVENT" && currentEvent) {
                 if (currentEvent.date && currentEvent.name) {
-                    const dateKey = currentEvent.date;
-                    if (!holidays[dateKey]) {
-                        holidays[dateKey] = [];
+                    // Filter out Tet-related holidays (already handled by lunar.js)
+                    const tetFilters = ["Tet Holiday", "Tet Eve", "Tet Nguyen Dan"];
+                    const isTetHoliday = tetFilters.some(f => currentEvent.name.includes(f));
+                    if (!isTetHoliday) {
+                        const dateKey = currentEvent.date;
+                        if (!holidays[dateKey]) {
+                            holidays[dateKey] = [];
+                        }
+                        holidays[dateKey].push({
+                            name: this.translateHolidayName(currentEvent.name),
+                            originalName: currentEvent.name
+                        });
                     }
-                    holidays[dateKey].push({
-                        name: this.translateHolidayName(currentEvent.name),
-                        originalName: currentEvent.name
-                    });
                 }
                 currentEvent = null;
             } else if (currentEvent) {
