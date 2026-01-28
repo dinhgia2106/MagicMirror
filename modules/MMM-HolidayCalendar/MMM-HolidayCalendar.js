@@ -66,8 +66,7 @@ Module.register("MMM-HolidayCalendar", {
         { month: 11, day: 20, name: "Ngày Nhà giáo VN" },
         { month: 12, day: 16, name: "Sinh nhật Duyên" },
         { month: 12, day: 24, name: "Đêm Giáng sinh" },
-        { month: 12, day: 25, name: "Giáng sinh" },
-        { month: 12, day: 31, name: "Đêm Giao thừa" }
+        { month: 12, day: 25, name: "Giáng sinh" }
     ],
 
     extraHolidaysEn: [
@@ -99,8 +98,12 @@ Module.register("MMM-HolidayCalendar", {
         this.dragStartX = 0;
         this.currentOffset = 0;
 
+        // Display Mode: 'solar' or 'lunar'
+        this.displayMode = "solar";
+
         // Add extra holidays first
         this.addExtraHolidays();
+        this.addLunarHolidays();
 
         this.loadHolidays();
         this.scheduleUpdate();
@@ -118,7 +121,6 @@ Module.register("MMM-HolidayCalendar", {
                 if (!this.holidays[dateKey]) {
                     this.holidays[dateKey] = [];
                 }
-                // Check if this holiday already exists
                 const exists = this.holidays[dateKey].some(existing => existing.name === h.name);
                 if (!exists) {
                     this.holidays[dateKey].push({
@@ -128,6 +130,62 @@ Module.register("MMM-HolidayCalendar", {
                 }
             });
         });
+    },
+
+    addLunarHolidays: function () {
+        if (typeof LunarCalendar === 'undefined' || this.config.language !== 'vi') return;
+
+        const currentYear = this.currentDate.getFullYear();
+
+        // Define lunar holidays: { lunarMonth, lunarDay, name }
+        const lunarHolidays = [
+            { lm: 1, ld: 1, name: "Mung 1 Tet" },
+            { lm: 1, ld: 2, name: "Mung 2 Tet" },
+            { lm: 1, ld: 3, name: "Mung 3 Tet" },
+            { lm: 3, ld: 10, name: "Gio To Hung Vuong" },
+            { lm: 8, ld: 15, name: "Tet Trung Thu" },
+            { lm: 1, ld: 15, name: "Ram thang Gieng" },
+            { lm: 7, ld: 15, name: "Vu Lan" }
+        ];
+
+        // Check surrounding lunar years
+        [currentYear - 1, currentYear, currentYear + 1].forEach(lunarYear => {
+            lunarHolidays.forEach(h => {
+                const solar = LunarCalendar.getSolarDate(h.ld, h.lm, lunarYear, false);
+                if (solar && solar.day > 0) {
+                    const dateKey = this.getDateKey(solar.year, solar.month - 1, solar.day);
+                    this.addHoliday(dateKey, h.name);
+                }
+            });
+
+            // Special case: Giao Thua (day before Mung 1 Tet)
+            const tetDay = LunarCalendar.getSolarDate(1, 1, lunarYear, false);
+            if (tetDay && tetDay.day > 0) {
+                // Get the day before Tet
+                const giaoThuaDate = new Date(tetDay.year, tetDay.month - 1, tetDay.day - 1);
+                const dateKey = this.getDateKey(
+                    giaoThuaDate.getFullYear(),
+                    giaoThuaDate.getMonth(),
+                    giaoThuaDate.getDate()
+                );
+                this.addHoliday(dateKey, "Giao Thua");
+            }
+        });
+    },
+
+    addHoliday: function (dateKey, name) {
+        if (!this.holidays[dateKey]) {
+            this.holidays[dateKey] = [];
+        }
+        // Avoid dups
+        const exists = this.holidays[dateKey].some(h => h.name === name);
+        if (!exists) {
+            this.holidays[dateKey].push({ name: name, isLunar: true });
+        }
+    },
+
+    getScripts: function () {
+        return ["lunar.js"];
     },
 
     getStyles: function () {
@@ -140,32 +198,43 @@ Module.register("MMM-HolidayCalendar", {
         wrapper.id = "holiday-calendar-" + this.identifier;
 
         if (!this.loaded) {
-            wrapper.innerHTML = '<div class="loading">Đang tải...</div>';
+            wrapper.innerHTML = '<div class="loading">Dang tai...</div>';
             return wrapper;
         }
 
-        // Create carousel container
-        const viewport = document.createElement("div");
-        viewport.className = "calendar-viewport";
+        // Apply current display mode class
+        wrapper.classList.add(this.displayMode === "lunar" ? "show-lunar" : "show-solar");
 
-        const track = document.createElement("div");
-        track.className = "calendar-track";
+        // Create flip container for smooth transition
+        const flipContainer = document.createElement("div");
+        flipContainer.className = "calendar-flip-container";
 
-        // Build 3 panels: prev, current, next
-        const prevDate = new Date(this.viewDate);
-        prevDate.setMonth(prevDate.getMonth() - 1);
+        // === SOLAR CALENDAR (Front) ===
+        const solarFace = document.createElement("div");
+        solarFace.className = "calendar-face solar-face";
+        solarFace.appendChild(this.buildCarousel(this.viewDate, "solar"));
+        flipContainer.appendChild(solarFace);
 
-        const nextDate = new Date(this.viewDate);
-        nextDate.setMonth(nextDate.getMonth() + 1);
+        // === LUNAR CALENDAR (Back) ===
+        const lunarFace = document.createElement("div");
+        lunarFace.className = "calendar-face lunar-face";
+        lunarFace.appendChild(this.buildCarousel(this.viewDate, "lunar"));
+        flipContainer.appendChild(lunarFace);
 
-        track.appendChild(this.buildPanel(prevDate, "prev"));
-        track.appendChild(this.buildPanel(this.viewDate, "current"));
-        track.appendChild(this.buildPanel(nextDate, "next"));
+        wrapper.appendChild(flipContainer);
 
-        viewport.appendChild(track);
-        wrapper.appendChild(viewport);
+        // Toggle Mode Click Handler (on flip container only)
+        flipContainer.onclick = (e) => {
+            // Prevent toggle if dragging
+            if (this.isDragging) return;
+            if (Math.abs(this.currentOffset) > 5) return; // Was dragging
 
-        // Holiday list OUTSIDE viewport so scrolling works
+            this.displayMode = this.displayMode === "solar" ? "lunar" : "solar";
+            wrapper.classList.remove("show-solar", "show-lunar");
+            wrapper.classList.add(this.displayMode === "lunar" ? "show-lunar" : "show-solar");
+        };
+
+        // Holiday list OUTSIDE flip container
         const holidayList = this.buildHolidayList(this.viewDate);
         wrapper.appendChild(holidayList);
 
@@ -225,13 +294,37 @@ Module.register("MMM-HolidayCalendar", {
             holidayList.style.cursor = 'grab';
         });
 
-        // Add touch event listeners for carousel
-        this.addTouchListeners(wrapper, track);
+        // Add touch event listeners for BOTH carousels
+        const solarTrack = wrapper.querySelector('.solar-face .calendar-track');
+        const lunarTrack = wrapper.querySelector('.lunar-face .calendar-track');
+        if (solarTrack) this.addTouchListeners(wrapper, solarTrack, lunarTrack);
 
         return wrapper;
     },
 
-    buildPanel: function (date, position) {
+    buildCarousel: function (viewDate, mode) {
+        const viewport = document.createElement("div");
+        viewport.className = "calendar-viewport";
+
+        const track = document.createElement("div");
+        track.className = "calendar-track";
+
+        // Build 3 panels: prev, current, next
+        const prevDate = new Date(viewDate);
+        prevDate.setMonth(prevDate.getMonth() - 1);
+
+        const nextDate = new Date(viewDate);
+        nextDate.setMonth(nextDate.getMonth() + 1);
+
+        track.appendChild(this.buildPanel(prevDate, "prev", mode));
+        track.appendChild(this.buildPanel(viewDate, "current", mode));
+        track.appendChild(this.buildPanel(nextDate, "next", mode));
+
+        viewport.appendChild(track);
+        return viewport;
+    },
+
+    buildPanel: function (date, position, mode) {
         const panel = document.createElement("div");
         panel.className = "calendar-panel " + position;
 
@@ -244,18 +337,26 @@ Module.register("MMM-HolidayCalendar", {
 
         const monthYear = document.createElement("div");
         monthYear.className = "month-year";
-        monthYear.innerHTML = `${monthNames[date.getMonth()]} ${date.getFullYear()}`;
+
+        // Show lunar month info in header when in lunar mode
+        if (mode === "lunar" && typeof LunarCalendar !== 'undefined') {
+            const lunar = LunarCalendar.getLunarDate(15, date.getMonth() + 1, date.getFullYear());
+            const canChi = LunarCalendar.getYearCanChi(lunar.year);
+            monthYear.innerHTML = `Thang ${lunar.month} - ${canChi}`;
+        } else {
+            monthYear.innerHTML = `${monthNames[date.getMonth()]} ${date.getFullYear()}`;
+        }
 
         header.appendChild(monthYear);
         panel.appendChild(header);
 
-        // Calendar grid only (holiday list is outside carousel now)
-        panel.appendChild(this.buildCalendarGrid(date));
+        // Calendar grid
+        panel.appendChild(this.buildCalendarGrid(date, mode));
 
         return panel;
     },
 
-    buildCalendarGrid: function (viewDate) {
+    buildCalendarGrid: function (viewDate, mode) {
         const calendar = document.createElement("div");
         calendar.className = "calendar-grid";
 
@@ -302,7 +403,19 @@ Module.register("MMM-HolidayCalendar", {
                     dayCell.textContent = prevDay;
                     dayCell.classList.add("other-month");
                 } else if (dayCount <= daysInMonth) {
-                    dayCell.textContent = dayCount;
+
+                    // Main Day Display based on mode
+                    if (mode === "lunar" && typeof LunarCalendar !== 'undefined') {
+                        const lunar = LunarCalendar.getLunarDate(dayCount, month + 1, year);
+                        if (lunar.day === 1) {
+                            dayCell.innerHTML = `${lunar.day}<span class="lunar-month">/${lunar.month}</span>`;
+                        } else {
+                            dayCell.textContent = lunar.day;
+                        }
+                        dayCell.classList.add("is-lunar");
+                    } else {
+                        dayCell.textContent = dayCount;
+                    }
 
                     if (this.config.highlightToday &&
                         year === this.currentDate.getFullYear() &&
@@ -383,13 +496,21 @@ Module.register("MMM-HolidayCalendar", {
         return listContainer;
     },
 
-    addTouchListeners: function (wrapper, track) {
+    addTouchListeners: function (wrapper, solarTrack, lunarTrack) {
         const self = this;
         const panelWidth = this.config.panelWidth;
 
         const updatePosition = (offset, animate) => {
-            track.style.transition = animate ? 'transform 0.3s ease' : 'none';
-            track.style.transform = `translateX(${-panelWidth + offset}px)`;
+            const transition = animate ? 'transform 0.3s ease' : 'none';
+            const transform = `translateX(${-panelWidth + offset}px)`;
+            if (solarTrack) {
+                solarTrack.style.transition = transition;
+                solarTrack.style.transform = transform;
+            }
+            if (lunarTrack) {
+                lunarTrack.style.transition = transition;
+                lunarTrack.style.transform = transform;
+            }
         };
 
         // Initialize position (show middle panel)
@@ -403,7 +524,8 @@ Module.register("MMM-HolidayCalendar", {
             self.isDragging = true;
             self.dragStartX = e.changedTouches[0].screenX;
             self.currentOffset = 0;
-            track.style.transition = 'none';
+            if (solarTrack) solarTrack.style.transition = 'none';
+            if (lunarTrack) lunarTrack.style.transition = 'none';
         }, { passive: true });
 
         wrapper.addEventListener("touchmove", function (e) {
@@ -416,7 +538,7 @@ Module.register("MMM-HolidayCalendar", {
         wrapper.addEventListener("touchend", function (e) {
             if (self.isDragging) {
                 self.isDragging = false;
-                self.handleDragEnd(track, panelWidth);
+                self.handleDragEnd(solarTrack, lunarTrack, panelWidth);
             }
         }, { passive: true });
 
@@ -428,7 +550,8 @@ Module.register("MMM-HolidayCalendar", {
             self.isDragging = true;
             self.dragStartX = e.screenX;
             self.currentOffset = 0;
-            track.style.transition = 'none';
+            if (solarTrack) solarTrack.style.transition = 'none';
+            if (lunarTrack) lunarTrack.style.transition = 'none';
             e.preventDefault();
         });
 
@@ -442,25 +565,35 @@ Module.register("MMM-HolidayCalendar", {
         wrapper.addEventListener("mouseup", function (e) {
             if (self.isDragging) {
                 self.isDragging = false;
-                self.handleDragEnd(track, panelWidth);
+                self.handleDragEnd(solarTrack, lunarTrack, panelWidth);
             }
         });
 
         wrapper.addEventListener("mouseleave", function () {
             if (self.isDragging) {
                 self.isDragging = false;
-                self.handleDragEnd(track, panelWidth);
+                self.handleDragEnd(solarTrack, lunarTrack, panelWidth);
             }
         });
     },
 
-    handleDragEnd: function (track, panelWidth) {
+    handleDragEnd: function (solarTrack, lunarTrack, panelWidth) {
         const threshold = panelWidth * 0.3; // 30% of panel width to trigger change
+
+        const animateTracks = (transform) => {
+            if (solarTrack) {
+                solarTrack.style.transition = 'transform 0.3s ease';
+                solarTrack.style.transform = transform;
+            }
+            if (lunarTrack) {
+                lunarTrack.style.transition = 'transform 0.3s ease';
+                lunarTrack.style.transform = transform;
+            }
+        };
 
         if (this.currentOffset > threshold) {
             // Go to previous month
-            track.style.transition = 'transform 0.3s ease';
-            track.style.transform = `translateX(0px)`;
+            animateTracks(`translateX(0px)`);
 
             setTimeout(() => {
                 this.viewDate.setMonth(this.viewDate.getMonth() - 1);
@@ -468,8 +601,7 @@ Module.register("MMM-HolidayCalendar", {
             }, 300);
         } else if (this.currentOffset < -threshold) {
             // Go to next month
-            track.style.transition = 'transform 0.3s ease';
-            track.style.transform = `translateX(${-panelWidth * 2}px)`;
+            animateTracks(`translateX(${-panelWidth * 2}px)`);
 
             setTimeout(() => {
                 this.viewDate.setMonth(this.viewDate.getMonth() + 1);
@@ -477,8 +609,7 @@ Module.register("MMM-HolidayCalendar", {
             }, 300);
         } else {
             // Snap back to current
-            track.style.transition = 'transform 0.3s ease';
-            track.style.transform = `translateX(${-panelWidth}px)`;
+            animateTracks(`translateX(${-panelWidth}px)`);
         }
 
         this.currentOffset = 0;

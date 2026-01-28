@@ -6,7 +6,7 @@
     width: 340px;
     user-select: none;
     -webkit-user-select: none;
-    cursor: grab;
+    cursor: pointer;
 }
 
 .holiday-calendar-wrapper:active {
@@ -213,4 +213,93 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* Lunar Date Styles */
+.lunar-month {
+    font-size: 10px;
+    opacity: 0.8;
+    margin-left: 2px;
+    display: inline-block;
+    vertical-align: text-top;
+}
+
+.day-cell.is-lunar {
+    font-weight: 400;
+    /* Regular weight for lunar numbers */
+}
+
+/* ========== FLIP ANIMATION STYLES ========== */
+
+/* Flip Container */
+.calendar-flip-container {
+    position: relative;
+    width: 340px;
+    height: 320px;
+    /* Adjust based on your calendar height */
+    perspective: 1000px;
+}
+
+/* Calendar Faces (Front = Solar, Back = Lunar) */
+.calendar-face {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    transition: transform 0.6s ease;
+    transform-style: preserve-3d;
+}
+
+.solar-face {
+    transform: rotateY(0deg);
+}
+
+.lunar-face {
+    transform: rotateY(180deg);
+}
+
+/* When showing Lunar calendar */
+.holiday-calendar-wrapper.show-lunar .solar-face {
+    transform: rotateY(-180deg);
+}
+
+.holiday-calendar-wrapper.show-lunar .lunar-face {
+    transform: rotateY(0deg);
+}
+
+/* When showing Solar calendar (default) */
+.holiday-calendar-wrapper.show-solar .solar-face {
+    transform: rotateY(0deg);
+}
+
+.holiday-calendar-wrapper.show-solar .lunar-face {
+    transform: rotateY(180deg);
+}
+
+/* Lunar mode indicator - subtle styling difference */
+.lunar-face .month-year {
+    color: #ffd43b;
+    /* Golden color for lunar calendar */
+}
+
+.lunar-face .day-cell.today {
+    background: rgba(255, 212, 59, 0.3);
+}
+
+/* Mode indicator hint */
+.holiday-calendar-wrapper::after {
+    content: '';
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.5);
+    transition: background 0.3s ease;
+}
+
+.holiday-calendar-wrapper.show-lunar::after {
+    background: #ffd43b;
 }
