@@ -759,6 +759,8 @@ Module.register("MMM-HolidayCalendar", {
             setTimeout(() => {
                 this.monthIndex--;
                 this.updateDom(0);
+                // Reset wasDragging after DOM update so click-to-flip works immediately
+                this.wasDragging = false;
             }, 300);
         } else if (this.currentOffset < -threshold) {
             // Go to next month
@@ -767,10 +769,14 @@ Module.register("MMM-HolidayCalendar", {
             setTimeout(() => {
                 this.monthIndex++;
                 this.updateDom(0);
+                // Reset wasDragging after DOM update so click-to-flip works immediately
+                this.wasDragging = false;
             }, 300);
         } else {
             // Snap back to current
             animateTracks(`translateX(${-panelWidth}px)`);
+            // Also reset wasDragging when snapping back
+            this.wasDragging = false;
         }
 
         this.currentOffset = 0;
