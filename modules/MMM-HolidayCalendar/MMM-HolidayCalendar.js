@@ -107,8 +107,8 @@ Module.register("MMM-HolidayCalendar", {
         const extraList = isVi ? this.extraHolidaysVi : this.extraHolidaysEn;
         const currentYear = this.currentDate.getFullYear();
 
-        // Add for current year and next year
-        [currentYear, currentYear + 1].forEach(year => {
+        // Add for previous year, current year and next year
+        [currentYear - 1, currentYear, currentYear + 1].forEach(year => {
             extraList.forEach(h => {
                 const dateKey = `${year}-${String(h.month).padStart(2, '0')}-${String(h.day).padStart(2, '0')}`;
                 if (!this.holidays[dateKey]) {
