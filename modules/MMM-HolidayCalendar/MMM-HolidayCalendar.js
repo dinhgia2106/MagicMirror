@@ -255,24 +255,50 @@ Module.register("MMM-HolidayCalendar", {
 
         wrapper.appendChild(flipContainer);
 
-        // Toggle Mode Click Handler (on flip container only)
+        // Custom double-click detection with 300ms threshold
+        let lastClickTime = 0;
+        let clickTimeout = null;
+
         flipContainer.addEventListener('click', (e) => {
-            // Prevent toggle if was dragging
+            // Prevent if was dragging
             if (this.wasDragging) {
                 this.wasDragging = false;
                 return;
             }
 
-            this.displayMode = this.displayMode === "solar" ? "lunar" : "solar";
-            wrapper.classList.remove("show-solar", "show-lunar");
-            wrapper.classList.add(this.displayMode === "lunar" ? "show-lunar" : "show-solar");
+            const currentTime = Date.now();
+            const timeDiff = currentTime - lastClickTime;
 
-            // Rebuild holiday list with correct day format
-            const oldList = wrapper.querySelector('.holiday-list');
-            if (oldList) {
-                const newList = this.buildHolidayList(this.getSolarDateForIndex(this.monthIndex));
-                this.setupHolidayListEvents(newList);
-                wrapper.replaceChild(newList, oldList);
+            if (timeDiff < 300 && timeDiff > 0) {
+                // Double-click detected - return to current month
+                clearTimeout(clickTimeout);
+                clickTimeout = null;
+                lastClickTime = 0;
+
+                // Only animate if not already at current month
+                if (this.monthIndex !== 0) {
+                    this.animateToCurrentMonth(wrapper);
+                }
+            } else {
+                // First click - wait to see if it's a double-click
+                lastClickTime = currentTime;
+                clickTimeout = setTimeout(() => {
+                    // Single click confirmed - toggle solar/lunar
+                    this.displayMode = this.displayMode === "solar" ? "lunar" : "solar";
+                    wrapper.classList.remove("show-solar", "show-lunar");
+                    wrapper.classList.add(this.displayMode === "lunar" ? "show-lunar" : "show-solar");
+
+                    // Rebuild holiday list with correct day format
+                    const oldList = wrapper.querySelector('.holiday-list');
+                    if (oldList) {
+                        const newList = this.buildHolidayList(this.getSolarDateForIndex(this.monthIndex));
+                        this.setupHolidayListEvents(newList);
+                        wrapper.replaceChild(newList, oldList);
+                    }
+
+                    clickTimeout = null;
+                    lastClickTime = 0;
+                }, 300);
             }
         });
 
@@ -774,6 +800,46 @@ Module.register("MMM-HolidayCalendar", {
         }
 
         this.currentOffset = 0;
+    },
+
+    // Animate slide back to current month (monthIndex = 0)
+    animateToCurrentMonth: function (wrapper) {
+        const panelWidth = this.config.panelWidth;
+        const solarTrack = wrapper.querySelector('.solar-face .calendar-track');
+        const lunarTrack = wrapper.querySelector('.lunar-face .calendar-track');
+
+        if (!solarTrack && !lunarTrack) {
+            // Fallback: just reset without animation
+            this.monthIndex = 0;
+            this.updateDom(0);
+            return;
+        }
+
+        // Determine direction based on current monthIndex
+        // If monthIndex > 0 (in the future), slide right to go back
+        // If monthIndex < 0 (in the past), slide left to go forward
+        const slideRight = this.monthIndex > 0;
+        const targetX = slideRight ? panelWidth : -panelWidth * 3;
+
+        const animateTracks = (transform) => {
+            if (solarTrack) {
+                solarTrack.style.transition = 'transform 0.25s ease-out';
+                solarTrack.style.transform = transform;
+            }
+            if (lunarTrack) {
+                lunarTrack.style.transition = 'transform 0.25s ease-out';
+                lunarTrack.style.transform = transform;
+            }
+        };
+
+        // Slide out of view
+        animateTracks(`translateX(${targetX}px)`);
+
+        // Reset to current month immediately after slide-out animation
+        setTimeout(() => {
+            this.monthIndex = 0;
+            this.updateDom(0);
+        }, 250);
     },
 
     getDateKey: function (year, month, day) {
