@@ -10,7 +10,7 @@ Module.register("MMM-HolidayCalendar", {
         fetchInterval: 7 * 24 * 60 * 60 * 1000, // 7 days
         language: "vi", // "vi" for Vietnamese, "en" for English
         highlightToday: true,
-        panelWidth: 280, // Width of each month panel
+        panelWidth: 340, // Width of each month panel
     },
 
     // Vietnamese day names
