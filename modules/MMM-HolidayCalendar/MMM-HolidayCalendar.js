@@ -112,6 +112,7 @@ Module.register("MMM-HolidayCalendar", {
         this.isDragging = false;
         this.dragStartX = 0;
         this.currentOffset = 0;
+        this.wasDragging = false;
 
         // Display Mode: 'solar' or 'lunar'
         this.displayMode = "solar";
@@ -279,15 +280,25 @@ Module.register("MMM-HolidayCalendar", {
         wrapper.appendChild(flipContainer);
 
         // Toggle Mode Click Handler (on flip container only)
-        flipContainer.onclick = (e) => {
-            // Prevent toggle if dragging
-            if (this.isDragging) return;
-            if (Math.abs(this.currentOffset) > 5) return; // Was dragging
+        flipContainer.addEventListener('click', (e) => {
+            // Prevent toggle if was dragging
+            if (this.wasDragging) {
+                this.wasDragging = false;
+                return;
+            }
 
             this.displayMode = this.displayMode === "solar" ? "lunar" : "solar";
             wrapper.classList.remove("show-solar", "show-lunar");
             wrapper.classList.add(this.displayMode === "lunar" ? "show-lunar" : "show-solar");
-        };
+
+            // Rebuild holiday list with correct day format
+            const oldList = wrapper.querySelector('.holiday-list');
+            if (oldList) {
+                const newList = this.buildHolidayList(this.getSolarDateForIndex(this.monthIndex));
+                this.setupHolidayListEvents(newList);
+                wrapper.replaceChild(newList, oldList);
+            }
+        });
 
         // Holiday list OUTSIDE flip container - based on current solar month
         const currentSolarDate = this.getSolarDateForIndex(this.monthIndex);
@@ -518,7 +529,13 @@ Module.register("MMM-HolidayCalendar", {
             const dateKey = this.getDateKey(year, month, day);
             if (this.holidays[dateKey]) {
                 this.holidays[dateKey].forEach(holiday => {
-                    monthHolidays.push({ day: day, ...holiday });
+                    // Calculate lunar day if in lunar mode
+                    let displayDay = day;
+                    if (this.displayMode === "lunar" && typeof LunarCalendar !== 'undefined') {
+                        const lunar = LunarCalendar.getLunarDate(day, month + 1, year);
+                        displayDay = lunar.day;
+                    }
+                    monthHolidays.push({ day: day, displayDay: displayDay, ...holiday });
                 });
             }
         }
@@ -527,7 +544,7 @@ Module.register("MMM-HolidayCalendar", {
             const noHoliday = document.createElement("div");
             noHoliday.className = "no-holiday";
             noHoliday.textContent = this.config.language === "vi"
-                ? "Không có ngày lễ"
+                ? "Khong co ngay le"
                 : "No holidays";
             listContainer.appendChild(noHoliday);
         } else {
@@ -538,7 +555,7 @@ Module.register("MMM-HolidayCalendar", {
 
                 const daySpan = document.createElement("span");
                 daySpan.className = "holiday-day";
-                daySpan.textContent = holiday.day;
+                daySpan.textContent = holiday.displayDay;
 
                 const nameSpan = document.createElement("span");
                 nameSpan.className = "holiday-name";
@@ -551,6 +568,64 @@ Module.register("MMM-HolidayCalendar", {
         }
 
         return listContainer;
+    },
+
+    setupHolidayListEvents: function (holidayList) {
+        // Stop touch events from propagating to carousel
+        holidayList.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+        holidayList.addEventListener('touchmove', (e) => e.stopPropagation(), { passive: true });
+        holidayList.addEventListener('touchend', (e) => e.stopPropagation(), { passive: true });
+        holidayList.addEventListener('mousedown', (e) => e.stopPropagation());
+        holidayList.addEventListener('mousemove', (e) => e.stopPropagation());
+        holidayList.addEventListener('mouseup', (e) => e.stopPropagation());
+
+        // Manual touch/drag scroll for holiday list
+        let isScrolling = false;
+        let startY = 0;
+        let scrollTop = 0;
+
+        holidayList.addEventListener('touchstart', (e) => {
+            isScrolling = true;
+            startY = e.touches[0].pageY;
+            scrollTop = holidayList.scrollTop;
+        }, { passive: true });
+
+        holidayList.addEventListener('touchmove', (e) => {
+            if (!isScrolling) return;
+            const y = e.touches[0].pageY;
+            const walk = startY - y;
+            holidayList.scrollTop = scrollTop + walk;
+        }, { passive: true });
+
+        holidayList.addEventListener('touchend', () => {
+            isScrolling = false;
+        }, { passive: true });
+
+        // Mouse drag scroll
+        holidayList.addEventListener('mousedown', (e) => {
+            isScrolling = true;
+            startY = e.pageY;
+            scrollTop = holidayList.scrollTop;
+            holidayList.style.cursor = 'grabbing';
+        });
+
+        holidayList.addEventListener('mousemove', (e) => {
+            if (!isScrolling) return;
+            e.preventDefault();
+            const y = e.pageY;
+            const walk = startY - y;
+            holidayList.scrollTop = scrollTop + walk;
+        });
+
+        holidayList.addEventListener('mouseup', () => {
+            isScrolling = false;
+            holidayList.style.cursor = 'grab';
+        });
+
+        holidayList.addEventListener('mouseleave', () => {
+            isScrolling = false;
+            holidayList.style.cursor = 'grab';
+        });
     },
 
     addTouchListeners: function (wrapper, solarTrack, lunarTrack) {
@@ -647,6 +722,11 @@ Module.register("MMM-HolidayCalendar", {
                 lunarTrack.style.transform = transform;
             }
         };
+
+        // Mark as dragging if moved more than 10px (to prevent accidental flip)
+        if (Math.abs(this.currentOffset) > 10) {
+            this.wasDragging = true;
+        }
 
         if (this.currentOffset > threshold) {
             // Go to previous month
