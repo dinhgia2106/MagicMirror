@@ -494,64 +494,146 @@ Module.register("MMM-HolidayCalendar", {
     },
 
     setupHolidayListEvents: function (holidayList) {
-        // State for scroll handling
+        // State for scroll handling with momentum
         let isDragging = false;
         let startY = 0;
         let scrollStart = 0;
+        let lastY = 0;
+        let velocity = 0;
+        let lastTime = 0;
+        let animationId = null;
 
-        // Touch scroll
+        // Stop any ongoing momentum animation
+        const stopMomentum = () => {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+        };
+
+        // Apply momentum scrolling with deceleration
+        const applyMomentum = () => {
+            // Deceleration factor (higher = faster stop)
+            const friction = 0.95;
+            const minVelocity = 0.5;
+
+            velocity *= friction;
+
+            if (Math.abs(velocity) > minVelocity) {
+                holidayList.scrollTop += velocity;
+                animationId = requestAnimationFrame(applyMomentum);
+            } else {
+                animationId = null;
+            }
+        };
+
+        // Touch scroll with momentum
         holidayList.addEventListener('touchstart', (e) => {
             e.stopPropagation();
+            stopMomentum();
             isDragging = true;
             startY = e.touches[0].clientY;
+            lastY = startY;
             scrollStart = holidayList.scrollTop;
+            lastTime = Date.now();
+            velocity = 0;
+            // Disable smooth scrolling during drag for immediate response
+            holidayList.style.scrollBehavior = 'auto';
         }, { passive: false });
 
         holidayList.addEventListener('touchmove', (e) => {
             e.stopPropagation();
             if (!isDragging) return;
-            const deltaY = startY - e.touches[0].clientY;
+
+            const currentY = e.touches[0].clientY;
+            const currentTime = Date.now();
+            const deltaTime = currentTime - lastTime;
+
+            // Calculate velocity
+            if (deltaTime > 0) {
+                velocity = (lastY - currentY) / deltaTime * 16; // Normalize to ~60fps
+            }
+
+            const deltaY = startY - currentY;
             holidayList.scrollTop = scrollStart + deltaY;
+
+            lastY = currentY;
+            lastTime = currentTime;
         }, { passive: false });
 
         holidayList.addEventListener('touchend', (e) => {
             e.stopPropagation();
             isDragging = false;
+            // Apply momentum when finger is released
+            if (Math.abs(velocity) > 1) {
+                applyMomentum();
+            }
+            // Re-enable smooth scrolling
+            holidayList.style.scrollBehavior = 'smooth';
         }, { passive: false });
 
-        // Mouse scroll (drag)
+        // Mouse scroll (drag) with momentum
         holidayList.addEventListener('mousedown', (e) => {
             e.stopPropagation();
+            stopMomentum();
             isDragging = true;
             startY = e.clientY;
+            lastY = startY;
             scrollStart = holidayList.scrollTop;
+            lastTime = Date.now();
+            velocity = 0;
             holidayList.style.cursor = 'grabbing';
+            holidayList.style.scrollBehavior = 'auto';
         });
 
         holidayList.addEventListener('mousemove', (e) => {
             e.stopPropagation();
             if (!isDragging) return;
             e.preventDefault();
-            const deltaY = startY - e.clientY;
+
+            const currentY = e.clientY;
+            const currentTime = Date.now();
+            const deltaTime = currentTime - lastTime;
+
+            // Calculate velocity
+            if (deltaTime > 0) {
+                velocity = (lastY - currentY) / deltaTime * 16;
+            }
+
+            const deltaY = startY - currentY;
             holidayList.scrollTop = scrollStart + deltaY;
+
+            lastY = currentY;
+            lastTime = currentTime;
         });
 
         holidayList.addEventListener('mouseup', (e) => {
             e.stopPropagation();
             isDragging = false;
             holidayList.style.cursor = 'grab';
+            // Apply momentum
+            if (Math.abs(velocity) > 1) {
+                applyMomentum();
+            }
+            holidayList.style.scrollBehavior = 'smooth';
         });
 
         holidayList.addEventListener('mouseleave', (e) => {
             e.stopPropagation();
-            isDragging = false;
-            holidayList.style.cursor = 'grab';
+            if (isDragging) {
+                isDragging = false;
+                holidayList.style.cursor = 'grab';
+                // Apply momentum even when leaving
+                if (Math.abs(velocity) > 1) {
+                    applyMomentum();
+                }
+            }
+            holidayList.style.scrollBehavior = 'smooth';
         });
 
-        // Mouse wheel scroll
+        // Mouse wheel scroll - already smooth via CSS
         holidayList.addEventListener('wheel', (e) => {
             e.stopPropagation();
-            holidayList.scrollTop += e.deltaY;
         }, { passive: true });
     },
 
@@ -588,6 +670,9 @@ Module.register("MMM-HolidayCalendar", {
         }, { passive: true });
 
         wrapper.addEventListener("touchmove", function (e) {
+            // Skip if touching holiday list
+            if (e.target.closest('.holiday-list')) return;
+
             if (self.isDragging) {
                 self.currentOffset = e.changedTouches[0].screenX - self.dragStartX;
                 updatePosition(self.currentOffset, false);
@@ -595,6 +680,9 @@ Module.register("MMM-HolidayCalendar", {
         }, { passive: true });
 
         wrapper.addEventListener("touchend", function (e) {
+            // Skip if touching holiday list
+            if (e.target.closest('.holiday-list')) return;
+
             if (self.isDragging) {
                 self.isDragging = false;
                 self.handleDragEnd(solarTrack, lunarTrack, panelWidth);
@@ -615,6 +703,9 @@ Module.register("MMM-HolidayCalendar", {
         });
 
         wrapper.addEventListener("mousemove", function (e) {
+            // Skip if on holiday list
+            if (e.target.closest('.holiday-list')) return;
+
             if (self.isDragging) {
                 self.currentOffset = e.screenX - self.dragStartX;
                 updatePosition(self.currentOffset, false);
@@ -622,13 +713,19 @@ Module.register("MMM-HolidayCalendar", {
         });
 
         wrapper.addEventListener("mouseup", function (e) {
+            // Skip if on holiday list
+            if (e.target.closest('.holiday-list')) return;
+
             if (self.isDragging) {
                 self.isDragging = false;
                 self.handleDragEnd(solarTrack, lunarTrack, panelWidth);
             }
         });
 
-        wrapper.addEventListener("mouseleave", function () {
+        wrapper.addEventListener("mouseleave", function (e) {
+            // Skip if leaving to/from holiday list
+            if (e.target.closest('.holiday-list')) return;
+
             if (self.isDragging) {
                 self.isDragging = false;
                 self.handleDragEnd(solarTrack, lunarTrack, panelWidth);
