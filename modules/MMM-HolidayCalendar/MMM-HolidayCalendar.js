@@ -504,11 +504,24 @@ Module.register("MMM-HolidayCalendar", {
 
     socketNotificationReceived: function (notification, payload) {
         if (notification === "HOLIDAYS_FETCHED" && payload.id === this.identifier) {
-            this.holidays = this.parseICS(payload.data);
+            // Merge fetched holidays with local extras (don't replace)
+            const fetchedHolidays = this.parseICS(payload.data);
+            for (const [dateKey, holidays] of Object.entries(fetchedHolidays)) {
+                if (!this.holidays[dateKey]) {
+                    this.holidays[dateKey] = [];
+                }
+                // Add fetched holidays that don't already exist
+                holidays.forEach(holiday => {
+                    const exists = this.holidays[dateKey].some(h => h.name === holiday.name);
+                    if (!exists) {
+                        this.holidays[dateKey].push(holiday);
+                    }
+                });
+            }
             this.loaded = true;
             this.updateDom(0);
         } else if (notification === "FETCH_ERROR" && payload.id === this.identifier) {
-            Log.error("Error fetching holidays:", payload.error);
+            Log.warn("Could not fetch holidays from server, using local holidays only");
             this.loaded = true;
             this.updateDom(0);
         }
