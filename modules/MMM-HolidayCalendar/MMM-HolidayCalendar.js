@@ -29,6 +29,12 @@ Module.register("MMM-HolidayCalendar", {
         "September", "October", "November", "December"
     ],
 
+    // Vietnamese lunar month names (1-12)
+    lunarMonthNames: [
+        "Gieng", "Hai", "Ba", "Tu", "Nam", "Sau",
+        "Bay", "Tam", "Chin", "Muoi", "Mot", "Chap"
+    ],
+
     // Holiday name translations
     holidayTranslations: {
         "Tet Eve": "Giao thừa",
@@ -90,8 +96,17 @@ Module.register("MMM-HolidayCalendar", {
         Log.info("Starting module: " + this.name);
         this.holidays = {};
         this.currentDate = new Date();
-        this.viewDate = new Date();
         this.loaded = false;
+
+        // Month index system: 0 = current month, +1 = next month, -1 = previous month
+        this.monthIndex = 0;
+
+        // Calculate base references
+        this.baseSolarYear = this.currentDate.getFullYear();
+        this.baseSolarMonth = this.currentDate.getMonth(); // 0-11
+
+        // Get current lunar month as base
+        this.baseLunarDate = null; // Will be set after lunar.js loads
 
         // Drag state
         this.isDragging = false;
@@ -107,6 +122,46 @@ Module.register("MMM-HolidayCalendar", {
 
         this.loadHolidays();
         this.scheduleUpdate();
+    },
+
+    // Get solar date for a given month index
+    getSolarDateForIndex: function (index) {
+        const date = new Date(this.baseSolarYear, this.baseSolarMonth + index, 1);
+        return date;
+    },
+
+    // Get lunar month/year for a given month index
+    getLunarInfoForIndex: function (index) {
+        if (typeof LunarCalendar === 'undefined') return null;
+
+        // Get current lunar date as base
+        const today = this.currentDate;
+        const baseLunar = LunarCalendar.getLunarDate(today.getDate(), today.getMonth() + 1, today.getFullYear());
+
+        // Calculate target lunar month
+        let targetMonth = baseLunar.month + index;
+        let targetYear = baseLunar.year;
+
+        // Handle month overflow/underflow
+        while (targetMonth > 12) {
+            targetMonth -= 12;
+            targetYear++;
+        }
+        while (targetMonth < 1) {
+            targetMonth += 12;
+            targetYear--;
+        }
+
+        return {
+            month: targetMonth,
+            year: targetYear
+        };
+    },
+
+    // Get the first day of a lunar month in solar calendar
+    getFirstDayOfLunarMonth: function (lunarMonth, lunarYear) {
+        if (typeof LunarCalendar === 'undefined') return null;
+        return LunarCalendar.getSolarDate(1, lunarMonth, lunarYear, false);
     },
 
     addExtraHolidays: function () {
@@ -212,13 +267,13 @@ Module.register("MMM-HolidayCalendar", {
         // === SOLAR CALENDAR (Front) ===
         const solarFace = document.createElement("div");
         solarFace.className = "calendar-face solar-face";
-        solarFace.appendChild(this.buildCarousel(this.viewDate, "solar"));
+        solarFace.appendChild(this.buildCarousel("solar"));
         flipContainer.appendChild(solarFace);
 
         // === LUNAR CALENDAR (Back) ===
         const lunarFace = document.createElement("div");
         lunarFace.className = "calendar-face lunar-face";
-        lunarFace.appendChild(this.buildCarousel(this.viewDate, "lunar"));
+        lunarFace.appendChild(this.buildCarousel("lunar"));
         flipContainer.appendChild(lunarFace);
 
         wrapper.appendChild(flipContainer);
@@ -234,8 +289,9 @@ Module.register("MMM-HolidayCalendar", {
             wrapper.classList.add(this.displayMode === "lunar" ? "show-lunar" : "show-solar");
         };
 
-        // Holiday list OUTSIDE flip container
-        const holidayList = this.buildHolidayList(this.viewDate);
+        // Holiday list OUTSIDE flip container - based on current solar month
+        const currentSolarDate = this.getSolarDateForIndex(this.monthIndex);
+        const holidayList = this.buildHolidayList(currentSolarDate);
         wrapper.appendChild(holidayList);
 
         // Stop touch events from propagating to carousel
@@ -302,29 +358,23 @@ Module.register("MMM-HolidayCalendar", {
         return wrapper;
     },
 
-    buildCarousel: function (viewDate, mode) {
+    buildCarousel: function (mode) {
         const viewport = document.createElement("div");
         viewport.className = "calendar-viewport";
 
         const track = document.createElement("div");
         track.className = "calendar-track";
 
-        // Build 3 panels: prev, current, next
-        const prevDate = new Date(viewDate);
-        prevDate.setMonth(prevDate.getMonth() - 1);
-
-        const nextDate = new Date(viewDate);
-        nextDate.setMonth(nextDate.getMonth() + 1);
-
-        track.appendChild(this.buildPanel(prevDate, "prev", mode));
-        track.appendChild(this.buildPanel(viewDate, "current", mode));
-        track.appendChild(this.buildPanel(nextDate, "next", mode));
+        // Build 3 panels based on monthIndex: prev (-1), current (0), next (+1)
+        track.appendChild(this.buildPanel(this.monthIndex - 1, "prev", mode));
+        track.appendChild(this.buildPanel(this.monthIndex, "current", mode));
+        track.appendChild(this.buildPanel(this.monthIndex + 1, "next", mode));
 
         viewport.appendChild(track);
         return viewport;
     },
 
-    buildPanel: function (date, position, mode) {
+    buildPanel: function (index, position, mode) {
         const panel = document.createElement("div");
         panel.className = "calendar-panel " + position;
 
@@ -332,31 +382,35 @@ Module.register("MMM-HolidayCalendar", {
         const header = document.createElement("div");
         header.className = "calendar-header";
 
-        const isVi = this.config.language === "vi";
-        const monthNames = isVi ? this.monthNamesVi : this.monthNamesEn;
-
         const monthYear = document.createElement("div");
         monthYear.className = "month-year";
 
-        // Show lunar month info in header when in lunar mode
-        if (mode === "lunar" && typeof LunarCalendar !== 'undefined') {
-            const lunar = LunarCalendar.getLunarDate(15, date.getMonth() + 1, date.getFullYear());
-            const canChi = LunarCalendar.getYearCanChi(lunar.year);
-            monthYear.innerHTML = `Thang ${lunar.month} - ${canChi}`;
+        if (mode === "lunar") {
+            // Get lunar month/year for this index
+            const lunarInfo = this.getLunarInfoForIndex(index);
+            if (lunarInfo) {
+                const monthName = this.lunarMonthNames[lunarInfo.month - 1];
+                const canChi = LunarCalendar.getYearCanChi(lunarInfo.year);
+                monthYear.innerHTML = `Thang ${monthName} - ${canChi}`;
+            }
         } else {
-            monthYear.innerHTML = `${monthNames[date.getMonth()]} ${date.getFullYear()}`;
+            // Solar mode
+            const solarDate = this.getSolarDateForIndex(index);
+            const isVi = this.config.language === "vi";
+            const monthNames = isVi ? this.monthNamesVi : this.monthNamesEn;
+            monthYear.innerHTML = `${monthNames[solarDate.getMonth()]} ${solarDate.getFullYear()}`;
         }
 
         header.appendChild(monthYear);
         panel.appendChild(header);
 
         // Calendar grid
-        panel.appendChild(this.buildCalendarGrid(date, mode));
+        panel.appendChild(this.buildCalendarGrid(index, mode));
 
         return panel;
     },
 
-    buildCalendarGrid: function (viewDate, mode) {
+    buildCalendarGrid: function (index, mode) {
         const calendar = document.createElement("div");
         calendar.className = "calendar-grid";
 
@@ -366,19 +420,20 @@ Module.register("MMM-HolidayCalendar", {
         // Day headers
         const dayHeader = document.createElement("div");
         dayHeader.className = "day-header-row";
-        dayNames.forEach((day, index) => {
+        dayNames.forEach((day, dayIndex) => {
             const dayCell = document.createElement("div");
             dayCell.className = "day-header";
-            if (index === 0) dayCell.classList.add("sunday");
-            if (index === 6) dayCell.classList.add("saturday");
+            if (dayIndex === 0) dayCell.classList.add("sunday");
+            if (dayIndex === 6) dayCell.classList.add("saturday");
             dayCell.textContent = day;
             dayHeader.appendChild(dayCell);
         });
         calendar.appendChild(dayHeader);
 
-        // Get calendar data
-        const year = viewDate.getFullYear();
-        const month = viewDate.getMonth();
+        // Get reference solar date for this index
+        const solarDate = this.getSolarDateForIndex(index);
+        const year = solarDate.getFullYear();
+        const month = solarDate.getMonth();
         const firstDay = new Date(year, month, 1);
         const lastDay = new Date(year, month + 1, 0);
         const startDay = firstDay.getDay();
@@ -417,6 +472,7 @@ Module.register("MMM-HolidayCalendar", {
                         dayCell.textContent = dayCount;
                     }
 
+                    // Highlight today
                     if (this.config.highlightToday &&
                         year === this.currentDate.getFullYear() &&
                         month === this.currentDate.getMonth() &&
@@ -424,6 +480,7 @@ Module.register("MMM-HolidayCalendar", {
                         dayCell.classList.add("today");
                     }
 
+                    // Check holidays
                     const dateKey = this.getDateKey(year, month, dayCount);
                     if (this.holidays[dateKey]) {
                         dayCell.classList.add("holiday");
@@ -596,7 +653,7 @@ Module.register("MMM-HolidayCalendar", {
             animateTracks(`translateX(0px)`);
 
             setTimeout(() => {
-                this.viewDate.setMonth(this.viewDate.getMonth() - 1);
+                this.monthIndex--;
                 this.updateDom(0);
             }, 300);
         } else if (this.currentOffset < -threshold) {
@@ -604,7 +661,7 @@ Module.register("MMM-HolidayCalendar", {
             animateTracks(`translateX(${-panelWidth * 2}px)`);
 
             setTimeout(() => {
-                this.viewDate.setMonth(this.viewDate.getMonth() + 1);
+                this.monthIndex++;
                 this.updateDom(0);
             }, 300);
         } else {
@@ -721,10 +778,10 @@ Module.register("MMM-HolidayCalendar", {
 
     notificationReceived: function (notification, payload, sender) {
         if (notification === "TOUCH_SWIPE_LEFT") {
-            this.viewDate.setMonth(this.viewDate.getMonth() + 1);
+            this.monthIndex++;
             this.updateDom(0);
         } else if (notification === "TOUCH_SWIPE_RIGHT") {
-            this.viewDate.setMonth(this.viewDate.getMonth() - 1);
+            this.monthIndex--;
             this.updateDom(0);
         }
     }
