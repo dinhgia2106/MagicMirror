@@ -161,7 +161,67 @@ Module.register("MMM-HolidayCalendar", {
         viewport.appendChild(track);
         wrapper.appendChild(viewport);
 
-        // Add touch event listeners
+        // Holiday list OUTSIDE viewport so scrolling works
+        const holidayList = this.buildHolidayList(this.viewDate);
+        wrapper.appendChild(holidayList);
+
+        // Stop touch events from propagating to carousel
+        holidayList.addEventListener('touchstart', (e) => e.stopPropagation(), { passive: true });
+        holidayList.addEventListener('touchmove', (e) => e.stopPropagation(), { passive: true });
+        holidayList.addEventListener('touchend', (e) => e.stopPropagation(), { passive: true });
+        holidayList.addEventListener('mousedown', (e) => e.stopPropagation());
+        holidayList.addEventListener('mousemove', (e) => e.stopPropagation());
+        holidayList.addEventListener('mouseup', (e) => e.stopPropagation());
+
+        // Manual touch/drag scroll for holiday list
+        let isScrolling = false;
+        let startY = 0;
+        let scrollTop = 0;
+
+        holidayList.addEventListener('touchstart', (e) => {
+            isScrolling = true;
+            startY = e.touches[0].pageY;
+            scrollTop = holidayList.scrollTop;
+        }, { passive: true });
+
+        holidayList.addEventListener('touchmove', (e) => {
+            if (!isScrolling) return;
+            const y = e.touches[0].pageY;
+            const walk = startY - y;
+            holidayList.scrollTop = scrollTop + walk;
+        }, { passive: true });
+
+        holidayList.addEventListener('touchend', () => {
+            isScrolling = false;
+        }, { passive: true });
+
+        // Mouse drag scroll
+        holidayList.addEventListener('mousedown', (e) => {
+            isScrolling = true;
+            startY = e.pageY;
+            scrollTop = holidayList.scrollTop;
+            holidayList.style.cursor = 'grabbing';
+        });
+
+        holidayList.addEventListener('mousemove', (e) => {
+            if (!isScrolling) return;
+            e.preventDefault();
+            const y = e.pageY;
+            const walk = startY - y;
+            holidayList.scrollTop = scrollTop + walk;
+        });
+
+        holidayList.addEventListener('mouseup', () => {
+            isScrolling = false;
+            holidayList.style.cursor = 'grab';
+        });
+
+        holidayList.addEventListener('mouseleave', () => {
+            isScrolling = false;
+            holidayList.style.cursor = 'grab';
+        });
+
+        // Add touch event listeners for carousel
         this.addTouchListeners(wrapper, track);
 
         return wrapper;
@@ -185,11 +245,8 @@ Module.register("MMM-HolidayCalendar", {
         header.appendChild(monthYear);
         panel.appendChild(header);
 
-        // Calendar grid
+        // Calendar grid only (holiday list is outside carousel now)
         panel.appendChild(this.buildCalendarGrid(date));
-
-        // Holiday list
-        panel.appendChild(this.buildHolidayList(date));
 
         return panel;
     },
@@ -300,7 +357,8 @@ Module.register("MMM-HolidayCalendar", {
                 : "No holidays";
             listContainer.appendChild(noHoliday);
         } else {
-            monthHolidays.slice(0, 3).forEach(holiday => {
+            // Render ALL holidays (scrollable via CSS)
+            monthHolidays.forEach(holiday => {
                 const item = document.createElement("div");
                 item.className = "holiday-item";
 
@@ -316,13 +374,6 @@ Module.register("MMM-HolidayCalendar", {
                 item.appendChild(nameSpan);
                 listContainer.appendChild(item);
             });
-
-            if (monthHolidays.length > 3) {
-                const more = document.createElement("div");
-                more.className = "holiday-more";
-                more.textContent = `+${monthHolidays.length - 3} ${this.config.language === "vi" ? "ngày khác" : "more"}`;
-                listContainer.appendChild(more);
-            }
         }
 
         return listContainer;
@@ -342,6 +393,9 @@ Module.register("MMM-HolidayCalendar", {
 
         // Touch events
         wrapper.addEventListener("touchstart", function (e) {
+            // If touching holiday list, don't trigger carousel drag
+            if (e.target.closest('.holiday-list')) return;
+
             self.isDragging = true;
             self.dragStartX = e.changedTouches[0].screenX;
             self.currentOffset = 0;
@@ -364,6 +418,9 @@ Module.register("MMM-HolidayCalendar", {
 
         // Mouse events
         wrapper.addEventListener("mousedown", function (e) {
+            // If clicking holiday list, don't trigger carousel drag
+            if (e.target.closest('.holiday-list')) return;
+
             self.isDragging = true;
             self.dragStartX = e.screenX;
             self.currentOffset = 0;

@@ -60,7 +60,6 @@
 .day-header-row {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
-    gap: 4px;
     margin-bottom: 6px;
 }
 
@@ -84,17 +83,24 @@
 .week-row {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
-    gap: 4px;
 }
 
 .day-cell {
+    /* Make it perfectly round */
+    width: 36px;
+    height: 36px;
+    line-height: 36px;
+    margin: 2px auto;
+
     text-align: center;
-    padding: 8px 0;
     font-size: 16px;
     font-weight: 400;
-    border-radius: 4px;
+    border-radius: 50%;
     position: relative;
     color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .day-cell.other-month {
@@ -113,7 +119,7 @@
     background: rgba(255, 255, 255, 0.2);
     color: #ffffff;
     font-weight: 600;
-    border-radius: 50%;
+    /* Border-radius 50% is already set above */
 }
 
 .day-cell.holiday:not(.today) {
@@ -124,7 +130,7 @@
 .day-cell.holiday::after {
     content: '';
     position: absolute;
-    bottom: 2px;
+    bottom: 4px;
     left: 50%;
     transform: translateX(-50%);
     width: 4px;
@@ -137,11 +143,35 @@
     background: #ffffff;
 }
 
-/* Holiday List */
+/* Holiday List - Scrollable */
 .holiday-list {
     padding-top: 12px;
     border-top: 1px solid rgba(255, 255, 255, 0.2);
-    min-height: 80px;
+    /* Fixed height for ~3 items */
+    height: 120px;
+    overflow-y: scroll;
+    overflow-x: hidden;
+    /* Enable touch scrolling */
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    /* Allow vertical scroll gestures */
+    touch-action: pan-y;
+    cursor: grab;
+}
+
+/* Show thin scrollbar */
+.holiday-list::-webkit-scrollbar {
+    width: 3px;
+}
+
+.holiday-list::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+}
+
+.holiday-list::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 2px;
 }
 
 .no-holiday {
@@ -154,7 +184,9 @@
 .holiday-item {
     display: flex;
     align-items: center;
-    padding: 6px 0;
+    padding: 4px 0;
+    /* Reduced padding slightly */
+    min-height: 32px;
 }
 
 .holiday-day {
@@ -177,14 +209,8 @@
     font-weight: 400;
     color: #ffffff;
     line-height: 1.3;
+    /* Allow text wrapping if needed, or keep ellipsis */
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-
-.holiday-more {
-    font-size: 12px;
-    color: rgba(255, 255, 255, 0.6);
-    padding: 6px 0;
-    text-align: center;
 }
