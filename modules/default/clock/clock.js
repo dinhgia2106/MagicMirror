@@ -130,8 +130,8 @@ Module.register("clock", {
 		}
 
 		if (this.config.showDate) {
-			// Capitalize each word for consistent display across Windows/Linux
-			const capitalizeWords = (str) => str.replace(/\b\p{L}/gu, char => char.toUpperCase());
+			// Capitalize first letter of each word for consistent display across Windows/Linux
+			const capitalizeWords = (str) => str.toLowerCase().replace(/(^|\s)\S/g, char => char.toUpperCase());
 			dateWrapper.innerHTML = capitalizeWords(now.format(this.config.dateFormat));
 			digitalWrapper.appendChild(dateWrapper);
 		}
