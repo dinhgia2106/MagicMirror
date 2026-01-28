@@ -31,15 +31,15 @@ Module.register("clock", {
 		lon: -122.344147
 	},
 	// Define required scripts.
-	getScripts () {
+	getScripts() {
 		return ["moment.js", "moment-timezone.js", "suncalc.js"];
 	},
 	// Define styles.
-	getStyles () {
+	getStyles() {
 		return ["clock_styles.css", "font-awesome.css"];
 	},
 	// Define start sequence.
-	start () {
+	start() {
 		Log.info(`Starting module: ${this.name}`);
 
 		// Schedule update interval.
@@ -88,7 +88,7 @@ Module.register("clock", {
 		moment.locale(config.language);
 	},
 	// Override dom generator.
-	getDom () {
+	getDom() {
 		const wrapper = document.createElement("div");
 		wrapper.classList.add("clock-grid");
 
@@ -130,7 +130,9 @@ Module.register("clock", {
 		}
 
 		if (this.config.showDate) {
-			dateWrapper.innerHTML = now.format(this.config.dateFormat);
+			// Capitalize each word for consistent display across Windows/Linux
+			const capitalizeWords = (str) => str.replace(/\b\p{L}/gu, char => char.toUpperCase());
+			dateWrapper.innerHTML = capitalizeWords(now.format(this.config.dateFormat));
 			digitalWrapper.appendChild(dateWrapper);
 		}
 
@@ -190,7 +192,7 @@ Module.register("clock", {
 			}
 
 			sunWrapperInnerHTML += `<span><i class="fas fa-arrow-up" aria-hidden="true"></i> ${formatTime(this.config, sunTimes.sunrise)}</span>`
-			  + `<span><i class="fas fa-arrow-down" aria-hidden="true"></i> ${formatTime(this.config, sunTimes.sunset)}</span>`;
+				+ `<span><i class="fas fa-arrow-down" aria-hidden="true"></i> ${formatTime(this.config, sunTimes.sunset)}</span>`;
 
 			sunWrapper.innerHTML = sunWrapperInnerHTML;
 			digitalWrapper.appendChild(sunWrapper);
@@ -218,8 +220,8 @@ Module.register("clock", {
 
 			moonWrapper.innerHTML
 				= `<span class="${isVisible ? "bright" : ""}">${image} ${showFraction ? illuminatedFractionString : ""}</span>`
-				  + `<span><i class="fas fa-arrow-up" aria-hidden="true"></i> ${moonRise ? formatTime(this.config, moonRise) : "..."}</span>`
-				  + `<span><i class="fas fa-arrow-down" aria-hidden="true"></i> ${moonSet ? formatTime(this.config, moonSet) : "..."}</span>`;
+				+ `<span><i class="fas fa-arrow-up" aria-hidden="true"></i> ${moonRise ? formatTime(this.config, moonRise) : "..."}</span>`
+				+ `<span><i class="fas fa-arrow-down" aria-hidden="true"></i> ${moonSet ? formatTime(this.config, moonSet) : "..."}</span>`;
 			digitalWrapper.appendChild(moonWrapper);
 		}
 
