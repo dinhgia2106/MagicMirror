@@ -91,12 +91,15 @@
             "recurring": true
         },
         {
-            "id": "solar-11",
+            "id": "rule-1",
             "name": "Father's Day",
             "nameVi": "Ngày của Cha",
-            "type": "solar",
-            "month": 6,
-            "day": 21,
+            "type": "rule",
+            "rule": {
+                "weekday": 6,
+                "ordinal": 3,
+                "month": 6
+            },
             "recurring": true
         },
         {
