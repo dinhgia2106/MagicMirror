@@ -969,9 +969,27 @@ Module.register("MMM-HolidayCalendar", {
 
     scheduleUpdate: function () {
         const self = this;
-        setInterval(function () {
-            self.loadHolidays();
-        }, this.config.fetchInterval);
+
+        // Refresh ICS calendar at fetchInterval (default 7 days)
+        if (this.config.calendarUrl) {
+            setInterval(function () {
+                self.loadHolidays();
+            }, this.config.fetchInterval);
+        }
+
+        // Refresh custom holidays from backend more frequently (5 minutes)
+        if (this.config.backendApiUrl) {
+            const refreshInterval = this.config.backendRefreshInterval || 5 * 60 * 1000; // 5 minutes
+            setInterval(function () {
+                // Clear existing custom holidays and reload
+                self.holidays = {};
+                if (!self.config.backendApiUrl) {
+                    self.addExtraHolidays();
+                    self.addLunarHolidays();
+                }
+                self.loadCustomHolidays();
+            }, refreshInterval);
+        }
 
         const now = new Date();
         const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
