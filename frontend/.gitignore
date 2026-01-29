@@ -1,0 +1,16 @@
+# Config (keep examples, ignore actual config)
+config.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (if using build tools later)
+node_modules/
+dist/

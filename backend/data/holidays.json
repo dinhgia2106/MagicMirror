@@ -1,0 +1,247 @@
+{
+    "holidays": [
+        {
+            "id": "solar-1",
+            "name": "Tet Duong lich",
+            "nameVi": "Tết Dương lịch",
+            "type": "solar",
+            "month": 1,
+            "day": 1,
+            "recurring": true
+        },
+        {
+            "id": "solar-2",
+            "name": "Valentine's Day",
+            "nameVi": "Lễ tình nhân",
+            "type": "solar",
+            "month": 2,
+            "day": 14,
+            "recurring": true
+        },
+        {
+            "id": "solar-3",
+            "name": "Mom's Birthday",
+            "nameVi": "Sinh nhật Mẹ",
+            "type": "solar",
+            "month": 2,
+            "day": 22,
+            "recurring": true
+        },
+        {
+            "id": "solar-4",
+            "name": "Women's Day",
+            "nameVi": "Quốc tế Phụ nữ",
+            "type": "solar",
+            "month": 3,
+            "day": 8,
+            "recurring": true
+        },
+        {
+            "id": "solar-5",
+            "name": "April Fools",
+            "nameVi": "Cá tháng Tư",
+            "type": "solar",
+            "month": 4,
+            "day": 1,
+            "recurring": true
+        },
+        {
+            "id": "solar-6",
+            "name": "Earth Day",
+            "nameVi": "Ngày Trái Đất",
+            "type": "solar",
+            "month": 4,
+            "day": 22,
+            "recurring": true
+        },
+        {
+            "id": "solar-7",
+            "name": "Labour Day",
+            "nameVi": "Quốc tế Lao động",
+            "type": "solar",
+            "month": 5,
+            "day": 1,
+            "recurring": true
+        },
+        {
+            "id": "solar-8",
+            "name": "Children's Day",
+            "nameVi": "Quốc tế Thiếu nhi",
+            "type": "solar",
+            "month": 6,
+            "day": 1,
+            "recurring": true
+        },
+        {
+            "id": "solar-9",
+            "name": "Dad's Birthday",
+            "nameVi": "Sinh nhật Ba",
+            "type": "solar",
+            "month": 6,
+            "day": 10,
+            "recurring": true
+        },
+        {
+            "id": "solar-10",
+            "name": "Gia's Birthday",
+            "nameVi": "Sinh nhật Gia",
+            "type": "solar",
+            "month": 6,
+            "day": 21,
+            "recurring": true
+        },
+        {
+            "id": "solar-11",
+            "name": "Father's Day",
+            "nameVi": "Ngày của Cha",
+            "type": "solar",
+            "month": 6,
+            "day": 21,
+            "recurring": true
+        },
+        {
+            "id": "solar-12",
+            "name": "VN Women's Day",
+            "nameVi": "Ngày Phụ nữ VN",
+            "type": "solar",
+            "month": 10,
+            "day": 20,
+            "recurring": true
+        },
+        {
+            "id": "solar-13",
+            "name": "Halloween",
+            "nameVi": "Halloween",
+            "type": "solar",
+            "month": 10,
+            "day": 31,
+            "recurring": true
+        },
+        {
+            "id": "solar-14",
+            "name": "Teacher's Day",
+            "nameVi": "Ngày Nhà giáo VN",
+            "type": "solar",
+            "month": 11,
+            "day": 20,
+            "recurring": true
+        },
+        {
+            "id": "solar-15",
+            "name": "Duyen's Birthday",
+            "nameVi": "Sinh nhật Duyên",
+            "type": "solar",
+            "month": 12,
+            "day": 16,
+            "recurring": true
+        },
+        {
+            "id": "solar-16",
+            "name": "Christmas Eve",
+            "nameVi": "Đêm Giáng sinh",
+            "type": "solar",
+            "month": 12,
+            "day": 24,
+            "recurring": true
+        },
+        {
+            "id": "solar-17",
+            "name": "Christmas",
+            "nameVi": "Giáng sinh",
+            "type": "solar",
+            "month": 12,
+            "day": 25,
+            "recurring": true
+        },
+        {
+            "id": "lunar-1",
+            "name": "Giao Thua",
+            "nameVi": "Giao thừa",
+            "type": "lunar",
+            "lunarMonth": 12,
+            "lunarDay": 30,
+            "recurring": true
+        },
+        {
+            "id": "lunar-2",
+            "name": "Tet Day 1",
+            "nameVi": "Mùng 1 Tết",
+            "type": "lunar",
+            "lunarMonth": 1,
+            "lunarDay": 1,
+            "recurring": true
+        },
+        {
+            "id": "lunar-3",
+            "name": "Tet Day 2",
+            "nameVi": "Mùng 2 Tết",
+            "type": "lunar",
+            "lunarMonth": 1,
+            "lunarDay": 2,
+            "recurring": true
+        },
+        {
+            "id": "lunar-4",
+            "name": "Tet Day 3",
+            "nameVi": "Mùng 3 Tết",
+            "type": "lunar",
+            "lunarMonth": 1,
+            "lunarDay": 3,
+            "recurring": true
+        },
+        {
+            "id": "lunar-5",
+            "name": "Lantern Festival",
+            "nameVi": "Rằm tháng Giêng",
+            "type": "lunar",
+            "lunarMonth": 1,
+            "lunarDay": 15,
+            "recurring": true
+        },
+        {
+            "id": "lunar-6",
+            "name": "Hung Kings Festival",
+            "nameVi": "Giỗ Tổ Hùng Vương",
+            "type": "lunar",
+            "lunarMonth": 3,
+            "lunarDay": 10,
+            "recurring": true
+        },
+        {
+            "id": "lunar-7",
+            "name": "Doan Ngo Festival",
+            "nameVi": "Tết Đoan Ngọ",
+            "type": "lunar",
+            "lunarMonth": 5,
+            "lunarDay": 5,
+            "recurring": true
+        },
+        {
+            "id": "lunar-8",
+            "name": "Vu Lan Festival",
+            "nameVi": "Lễ Vu Lan",
+            "type": "lunar",
+            "lunarMonth": 7,
+            "lunarDay": 15,
+            "recurring": true
+        },
+        {
+            "id": "lunar-9",
+            "name": "Mid-Autumn Festival",
+            "nameVi": "Tết Trung Thu",
+            "type": "lunar",
+            "lunarMonth": 8,
+            "lunarDay": 15,
+            "recurring": true
+        },
+        {
+            "id": "lunar-10",
+            "name": "Kitchen Gods Day",
+            "nameVi": "Ông Công Ông Táo",
+            "type": "lunar",
+            "lunarMonth": 12,
+            "lunarDay": 23,
+            "recurring": true
+        }
+    ]
+}

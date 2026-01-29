@@ -7,6 +7,7 @@
 Module.register("MMM-HolidayCalendar", {
     defaults: {
         calendarUrl: "https://www.officeholidays.com/ics/vietnam",
+        backendApiUrl: null, // e.g., "http://192.168.1.100:8000/api/holidays"
         fetchInterval: 7 * 24 * 60 * 60 * 1000, // 7 days
         language: "vi", // "vi" for Vietnamese, "en" for English
         highlightToday: true,
@@ -119,6 +120,7 @@ Module.register("MMM-HolidayCalendar", {
         this.addLunarHolidays();
 
         this.loadHolidays();
+        this.loadCustomHolidays();
         this.scheduleUpdate();
     },
 
@@ -884,6 +886,80 @@ Module.register("MMM-HolidayCalendar", {
         });
     },
 
+    loadCustomHolidays: function () {
+        if (this.config.backendApiUrl) {
+            this.sendSocketNotification("FETCH_CUSTOM_HOLIDAYS", {
+                url: this.config.backendApiUrl,
+                id: this.identifier
+            });
+        }
+    },
+
+    // Calculate date for rule-based holidays (e.g., 2nd Monday of March)
+    calculateRuleBasedDate: function (rule, year) {
+        const month = rule.month - 1; // 0-indexed
+        const weekday = rule.weekday; // 0=Monday, 6=Sunday
+        const ordinal = rule.ordinal;
+
+        // Convert weekday: our 0=Monday, JS 0=Sunday
+        const jsWeekday = (weekday + 1) % 7;
+
+        if (ordinal === -1) {
+            // Last occurrence
+            const lastDay = new Date(year, month + 1, 0);
+            let day = lastDay.getDate();
+            while (new Date(year, month, day).getDay() !== jsWeekday) {
+                day--;
+            }
+            return { year, month: month + 1, day };
+        } else {
+            // Nth occurrence
+            let count = 0;
+            for (let day = 1; day <= 31; day++) {
+                const date = new Date(year, month, day);
+                if (date.getMonth() !== month) break;
+                if (date.getDay() === jsWeekday) {
+                    count++;
+                    if (count === ordinal) {
+                        return { year, month: month + 1, day };
+                    }
+                }
+            }
+        }
+        return null;
+    },
+
+    addCustomHoliday: function (holiday) {
+        const currentYear = this.currentDate.getFullYear();
+        const years = [currentYear - 1, currentYear, currentYear + 1];
+        const isVi = this.config.language === "vi";
+        const name = (isVi && holiday.nameVi) ? holiday.nameVi : holiday.name;
+
+        years.forEach(year => {
+            let dateKey = null;
+
+            if (holiday.type === "solar") {
+                dateKey = this.getDateKey(year, holiday.month - 1, holiday.day);
+            } else if (holiday.type === "lunar" && typeof LunarCalendar !== 'undefined') {
+                const solar = LunarCalendar.getSolarDate(holiday.lunarDay, holiday.lunarMonth, year, false);
+                if (solar && solar.day > 0) {
+                    dateKey = this.getDateKey(solar.year, solar.month - 1, solar.day);
+                }
+            } else if (holiday.type === "specific" && holiday.year === year) {
+                dateKey = this.getDateKey(year, holiday.month - 1, holiday.day);
+            } else if (holiday.type === "rule" && holiday.rule) {
+                const ruleDate = this.calculateRuleBasedDate(holiday.rule, year);
+                if (ruleDate) {
+                    dateKey = this.getDateKey(ruleDate.year, ruleDate.month - 1, ruleDate.day);
+                }
+            }
+
+            if (dateKey) {
+                this.addHoliday(dateKey, name);
+            }
+        });
+    },
+
     scheduleUpdate: function () {
         const self = this;
         setInterval(function () {
@@ -979,6 +1055,14 @@ Module.register("MMM-HolidayCalendar", {
             Log.warn("Could not fetch holidays from server, using local holidays only");
             this.loaded = true;
             this.updateDom(0);
+        } else if (notification === "CUSTOM_HOLIDAYS_FETCHED" && payload.id === this.identifier) {
+            // Add custom holidays from backend API
+            payload.data.forEach(holiday => {
+                this.addCustomHoliday(holiday);
+            });
+            this.updateDom(0);
+        } else if (notification === "CUSTOM_HOLIDAYS_ERROR" && payload.id === this.identifier) {
+            Log.warn("Could not fetch custom holidays from backend API:", payload.error);
         }
     },
 

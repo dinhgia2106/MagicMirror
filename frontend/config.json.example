@@ -1,0 +1,6 @@
+{
+  "apiUrl": "http://localhost:8000",
+  "language": "vi",
+  "dateFormat": "DD/MM/YYYY",
+  "theme": "dark"
+}

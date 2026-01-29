@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Holiday Manager - MagicMirror</title>
+    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/form.css">
+    <link rel="stylesheet" href="css/list.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <h1>Holiday Manager</h1>
+            <p class="subtitle">MagicMirror Calendar Configuration</p>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Control Bar -->
+            <div class="control-bar">
+                <div class="search-box">
+                    <input type="text" id="searchInput" placeholder="Search holidays...">
+                </div>
+                <button class="btn btn-primary" id="addHolidayBtn">Add Holiday</button>
+            </div>
+
+            <!-- Filter Tabs -->
+            <div class="filter-tabs">
+                <button class="filter-tab active" data-filter="all">All</button>
+                <button class="filter-tab" data-filter="solar">Solar</button>
+                <button class="filter-tab" data-filter="lunar">Lunar</button>
+                <button class="filter-tab" data-filter="rule">Rule-based</button>
+            </div>
+
+            <!-- Holiday List -->
+            <div class="holiday-list" id="holidayList">
+                <div class="loading">Loading holidays...</div>
+            </div>
+        </main>
+
+        <!-- Modal for Add/Edit Holiday -->
+        <div class="modal-overlay" id="modalOverlay">
+            <div class="modal">
+                <div class="modal-header">
+                    <h2 id="modalTitle">Add Holiday</h2>
+                    <button class="modal-close" id="modalClose">&times;</button>
+                </div>
+                <form id="holidayForm" class="holiday-form">
+                    <input type="hidden" id="holidayId">
+                    
+                    <div class="form-group">
+                        <label for="holidayName">Name (English)</label>
+                        <input type="text" id="holidayName" required placeholder="e.g., Valentine's Day">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="holidayNameVi">Name (Vietnamese)</label>
+                        <input type="text" id="holidayNameVi" placeholder="e.g., Le tinh nhan">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="holidayType">Type</label>
+                        <select id="holidayType" required>
+                            <option value="solar">Solar Calendar (Fixed Date)</option>
+                            <option value="lunar">Lunar Calendar</option>
+                            <option value="specific">Specific Date (One-time)</option>
+                            <option value="rule">Rule-based</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Solar/Specific Date Fields -->
+                    <div class="form-row date-fields solar-fields">
+                        <div class="form-group">
+                            <label for="solarMonth">Month</label>
+                            <select id="solarMonth">
+                                <option value="1">January (1)</option>
+                                <option value="2">February (2)</option>
+                                <option value="3">March (3)</option>
+                                <option value="4">April (4)</option>
+                                <option value="5">May (5)</option>
+                                <option value="6">June (6)</option>
+                                <option value="7">July (7)</option>
+                                <option value="8">August (8)</option>
+                                <option value="9">September (9)</option>
+                                <option value="10">October (10)</option>
+                                <option value="11">November (11)</option>
+                                <option value="12">December (12)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="solarDay">Day</label>
+                            <input type="number" id="solarDay" min="1" max="31" value="1">
+                        </div>
+                    </div>
+                    
+                    <!-- Year Field for Specific Date -->
+                    <div class="form-group year-field" style="display: none;">
+                        <label for="solarYear">Year</label>
+                        <input type="number" id="solarYear" min="2000" max="2100" value="2026">
+                    </div>
+                    
+                    <!-- Lunar Date Fields -->
+                    <div class="form-row date-fields lunar-fields" style="display: none;">
+                        <div class="form-group">
+                            <label for="lunarMonth">Lunar Month</label>
+                            <select id="lunarMonth">
+                                <option value="1">Gieng (1)</option>
+                                <option value="2">Hai (2)</option>
+                                <option value="3">Ba (3)</option>
+                                <option value="4">Tu (4)</option>
+                                <option value="5">Nam (5)</option>
+                                <option value="6">Sau (6)</option>
+                                <option value="7">Bay (7)</option>
+                                <option value="8">Tam (8)</option>
+                                <option value="9">Chin (9)</option>
+                                <option value="10">Muoi (10)</option>
+                                <option value="11">Muoi Mot (11)</option>
+                                <option value="12">Chap (12)</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="lunarDay">Lunar Day</label>
+                            <input type="number" id="lunarDay" min="1" max="30" value="1">
+                        </div>
+                    </div>
+                    
+                    <!-- Rule-based Fields -->
+                    <div class="rule-fields" style="display: none;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="ruleOrdinal">Which</label>
+                                <select id="ruleOrdinal">
+                                    <option value="1">First (1st)</option>
+                                    <option value="2">Second (2nd)</option>
+                                    <option value="3">Third (3rd)</option>
+                                    <option value="4">Fourth (4th)</option>
+                                    <option value="-1">Last</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="ruleWeekday">Weekday</label>
+                                <select id="ruleWeekday">
+                                    <option value="0">Monday</option>
+                                    <option value="1">Tuesday</option>
+                                    <option value="2">Wednesday</option>
+                                    <option value="3">Thursday</option>
+                                    <option value="4">Friday</option>
+                                    <option value="5">Saturday</option>
+                                    <option value="6">Sunday</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="ruleMonth">of Month</label>
+                            <select id="ruleMonth">
+                                <option value="1">January</option>
+                                <option value="2">February</option>
+                                <option value="3">March</option>
+                                <option value="4">April</option>
+                                <option value="5">May</option>
+                                <option value="6">June</option>
+                                <option value="7">July</option>
+                                <option value="8">August</option>
+                                <option value="9">September</option>
+                                <option value="10">October</option>
+                                <option value="11">November</option>
+                                <option value="12">December</option>
+                            </select>
+                        </div>
+                    </div>
+                    
+                    <div class="form-group checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="holidayRecurring" checked>
+                            <span>Recurring yearly</span>
+                        </label>
+                    </div>
+                    
+                    <div class="form-actions">
+                        <button type="button" class="btn btn-secondary" id="cancelBtn">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save Holiday</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Toast Notification -->
+        <div class="toast" id="toast"></div>
+    </div>
+
+    <!-- Settings Panel -->
+    <div class="settings-panel">
+        <div class="settings-header">
+            <span>API Settings</span>
+        </div>
+        <div class="settings-content">
+            <div class="form-group">
+                <label for="apiUrl">Backend URL</label>
+                <input type="text" id="apiUrl" value="http://localhost:8000">
+            </div>
+            <button class="btn btn-sm" id="saveApiUrl">Save</button>
+            <button class="btn btn-sm" id="testConnection">Test</button>
+        </div>
+    </div>
+
+    <script src="js/config.js"></script>
+    <script src="js/api.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
