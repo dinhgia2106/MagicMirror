@@ -115,9 +115,11 @@ Module.register("MMM-HolidayCalendar", {
         // Display Mode: 'solar' or 'lunar'
         this.displayMode = "solar";
 
-        // Add extra holidays first
-        this.addExtraHolidays();
-        this.addLunarHolidays();
+        // Only add hardcoded holidays if NOT using backend API
+        if (!this.config.backendApiUrl) {
+            this.addExtraHolidays();
+            this.addLunarHolidays();
+        }
 
         this.loadHolidays();
         this.loadCustomHolidays();
@@ -880,10 +882,15 @@ Module.register("MMM-HolidayCalendar", {
     },
 
     loadHolidays: function () {
-        this.sendSocketNotification("FETCH_HOLIDAYS", {
-            url: this.config.calendarUrl,
-            id: this.identifier
-        });
+        if (this.config.calendarUrl) {
+            this.sendSocketNotification("FETCH_HOLIDAYS", {
+                url: this.config.calendarUrl,
+                id: this.identifier
+            });
+        } else {
+            // No external calendar, mark as loaded
+            this.loaded = true;
+        }
     },
 
     loadCustomHolidays: function () {
