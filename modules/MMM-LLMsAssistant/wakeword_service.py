@@ -172,13 +172,31 @@ class WakeWordService:
                 "--write-media", temp_path
             ], check=True, capture_output=True)
             
-            # Play audio
-            if sys.platform == "win32":
-                os.system(f'start /wait "" "{temp_path}"')
-            elif sys.platform == "darwin":
-                os.system(f'afplay "{temp_path}"')
-            else:
-                os.system(f'mpg123 -q "{temp_path}" 2>/dev/null || ffplay -nodisp -autoexit "{temp_path}" 2>/dev/null')
+            # Play audio using pygame (cross-platform)
+            try:
+                import pygame
+                pygame.mixer.init()
+                pygame.mixer.music.load(temp_path)
+                pygame.mixer.music.play()
+                while pygame.mixer.music.get_busy():
+                    pygame.time.wait(100)
+                pygame.mixer.quit()
+            except ImportError:
+                # Fallback to playsound
+                try:
+                    from playsound import playsound
+                    playsound(temp_path)
+                except ImportError:
+                    # Last fallback - platform specific
+                    if sys.platform == "win32":
+                        import winsound
+                        # Convert mp3 to wav for winsound (or use ffplay)
+                        subprocess.run(["ffplay", "-nodisp", "-autoexit", temp_path], 
+                                      capture_output=True)
+                    elif sys.platform == "darwin":
+                        os.system(f'afplay "{temp_path}"')
+                    else:
+                        os.system(f'mpg123 -q "{temp_path}" 2>/dev/null || ffplay -nodisp -autoexit "{temp_path}" 2>/dev/null')
                 
             os.unlink(temp_path)
         except Exception as e:
