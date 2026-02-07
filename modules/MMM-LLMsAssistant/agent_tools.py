@@ -374,7 +374,7 @@ class AgentTools:
                     "wind_speed_10m_max"
                 ],
                 "timezone": "Asia/Ho_Chi_Minh",
-                "forecast_days": days
+                "forecast_days": 7  # Always get 7 days to cover tomorrow/next week even if LLM asks for 1
             }
             
             response = requests.get(url, params=params, timeout=10)
@@ -395,9 +395,28 @@ class AgentTools:
             
             forecasts = []
             dates = daily.get("time", [])
+            
+            # Calculate today in correct timezone for relative date comparison
+            today = datetime.datetime.now(self.timezone).date()
+            
             for i in range(len(dates)):
+                # Calculate relative day description
+                forecast_date = datetime.datetime.strptime(dates[i], "%Y-%m-%d").date()
+                diff_days = (forecast_date - today).days
+                
+                relative_day = ""
+                if diff_days == 0:
+                    relative_day = "HOM NAY (Today)"
+                elif diff_days == 1:
+                    relative_day = "NGAY MAI (Tomorrow" 
+                elif diff_days == 2:
+                    relative_day = "NGAY KIA"
+                else:
+                    relative_day = f"Sau {diff_days} ngay"
+
                 weather_code = daily.get("weather_code", [])[i] if i < len(daily.get("weather_code", [])) else 0
                 forecasts.append({
+                    "relative_day": relative_day,
                     "date": dates[i],
                     "temp_max": daily.get("temperature_2m_max", [])[i] if i < len(daily.get("temperature_2m_max", [])) else None,
                     "temp_min": daily.get("temperature_2m_min", [])[i] if i < len(daily.get("temperature_2m_min", [])) else None,
@@ -552,7 +571,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "get_weather_forecast",
-        "description": "Get weather forecast for the next 1-7 days with daily max/min temperatures and conditions.",
+        "description": "Get weather forecast for the next 1-7 days. IMPORTANT: This returns a LIST of daily forecasts. You MUST look at the 'date' field in each item to find the specific day the user asked for (e.g. tomorrow). Do not just take the first item.",
         "parameters": {
             "type": "object",
             "properties": {
