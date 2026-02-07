@@ -126,14 +126,20 @@ class WakeWordService:
             import google.generativeai as genai
             
             genai.configure(api_key=self.llm_api_key)
-            model = genai.GenerativeModel('gemini-2.0-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
             
             response = model.generate_content(
                 f"You are a helpful Vietnamese assistant named Lens. Respond concisely in Vietnamese. User: {text}"
             )
             return response.text
         except Exception as e:
-            return f"Error: {str(e)}"
+            error_msg = str(e).lower()
+            if "quota" in error_msg or "429" in str(e):
+                return "API quota exceeded. Please try again later."
+            elif "api_key" in error_msg or "401" in str(e):
+                return "Invalid API key."
+            else:
+                return "Cannot connect to AI service."
             
     def get_openai_response(self, text):
         """Get response from OpenAI"""
