@@ -1,0 +1,7 @@
+{
+    "name": "mmm-llmsassistant",
+    "version": "1.0.0",
+    "description": "Voice Assistant with Wake Word Detection for MagicMirror",
+    "main": "node_helper.js",
+    "dependencies": {}
+}

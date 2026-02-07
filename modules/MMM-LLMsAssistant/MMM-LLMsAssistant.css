@@ -1,0 +1,152 @@
+.llms-assistant {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 20px;
+    min-width: 200px;
+}
+
+/* Status Orb */
+.assistant-orb {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border: 2px solid #0f3460;
+    transition: all 0.3s ease;
+    position: relative;
+}
+
+.assistant-orb::before {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #4a9fff;
+    opacity: 0.5;
+}
+
+/* Idle state */
+.assistant-orb.idle {
+    border-color: #0f3460;
+}
+
+.assistant-orb.idle::before {
+    background: #4a9fff;
+    animation: pulse-idle 3s infinite;
+}
+
+/* Listening state */
+.assistant-orb.listening {
+    border-color: #00d9ff;
+    box-shadow: 0 0 20px rgba(0, 217, 255, 0.4);
+}
+
+.assistant-orb.listening::before {
+    background: #00d9ff;
+    animation: pulse-active 0.5s infinite;
+}
+
+/* Processing state */
+.assistant-orb.processing {
+    border-color: #ffd700;
+    box-shadow: 0 0 20px rgba(255, 215, 0, 0.4);
+}
+
+.assistant-orb.processing::before {
+    background: #ffd700;
+    animation: spin 1s linear infinite;
+}
+
+/* Speaking state */
+.assistant-orb.speaking {
+    border-color: #00ff88;
+    box-shadow: 0 0 20px rgba(0, 255, 136, 0.4);
+}
+
+.assistant-orb.speaking::before {
+    background: #00ff88;
+    animation: speak 0.3s infinite;
+}
+
+/* Animations */
+@keyframes pulse-idle {
+
+    0%,
+    100% {
+        transform: translate(-50%, -50%) scale(1);
+        opacity: 0.5;
+    }
+
+    50% {
+        transform: translate(-50%, -50%) scale(1.2);
+        opacity: 0.8;
+    }
+}
+
+@keyframes pulse-active {
+
+    0%,
+    100% {
+        transform: translate(-50%, -50%) scale(1);
+    }
+
+    50% {
+        transform: translate(-50%, -50%) scale(1.5);
+    }
+}
+
+@keyframes spin {
+    0% {
+        transform: translate(-50%, -50%) rotate(0deg);
+    }
+
+    100% {
+        transform: translate(-50%, -50%) rotate(360deg);
+    }
+}
+
+@keyframes speak {
+
+    0%,
+    100% {
+        transform: translate(-50%, -50%) scaleY(1);
+    }
+
+    50% {
+        transform: translate(-50%, -50%) scaleY(1.5);
+    }
+}
+
+/* Status Text */
+.assistant-status {
+    margin-top: 15px;
+    font-size: 14px;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+/* Transcript Area */
+.assistant-transcript {
+    margin-top: 20px;
+    max-width: 300px;
+    text-align: center;
+}
+
+.user-text {
+    color: #00d9ff;
+    font-size: 14px;
+    margin-bottom: 10px;
+    font-style: italic;
+}
+
+.ai-text {
+    color: #fff;
+    font-size: 16px;
+    line-height: 1.4;
+}
