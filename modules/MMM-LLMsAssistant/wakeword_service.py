@@ -16,6 +16,7 @@ import subprocess
 import threading
 import re
 import time
+import queue
 
 # Force UTF-8 encoding for stdout/stderr on Windows
 if sys.platform == "win32":
@@ -143,6 +144,13 @@ class WakeWordService:
         self.microphone = sr.Microphone()
         self.conversation = ConversationManager()
         
+        # TTS Queue and Worker
+        self.tts_queue = queue.Queue()
+        self.stop_tts_flag = threading.Event()
+        self.current_tts_process = None
+        self.tts_thread = threading.Thread(target=self._process_tts_queue, daemon=True)
+        self.tts_thread.start()        
+        
         # Initialize agent tools for function calling
         self.agent_tools = AgentTools({
             "holiday_api_url": "http://192.168.1.11:8000/api/holidays",
@@ -150,6 +158,47 @@ class WakeWordService:
             "lon": 107.590866,
             "timezone": "Asia/Ho_Chi_Minh"
         })
+
+    def _process_tts_queue(self):
+        """Worker thread to process TTS queue sequentially"""
+        while True:
+            try:
+                text = self.tts_queue.get()
+                if text is None: break  # Poison pill
+                
+                # Check stop flag before speaking
+                if not self.stop_tts_flag.is_set():
+                    self.speak(text)
+                
+                self.tts_queue.task_done()
+            except Exception as e:
+                self.emit("error", message=f"TTS Queue Error: {e}")
+
+    def stop_current_tts(self):
+        """Stop current TTS playback and clear queue"""
+        self.stop_tts_flag.set()
+        
+        # Clear queue
+        with self.tts_queue.mutex:
+            self.tts_queue.queue.clear()
+            
+        # Kill current process
+        if self.current_tts_process:
+            try:
+                self.current_tts_process.terminate()
+                self.current_tts_process.wait(timeout=0.5)
+            except:
+                pass
+            self.current_tts_process = None
+        
+        # Allow new TTS tasks after a short moment
+        # Reset flag in start_conversation would be better, but here is instant stop
+        pass
+
+    def reset_tts_state(self):
+        """Reset TTS state for new conversation"""
+        self.stop_current_tts()
+        self.stop_tts_flag.clear()
         
     def emit(self, event_type, **kwargs):
         """Emit JSON event to stdout for Node.js - uses base64 for text to avoid Windows encoding issues"""
@@ -231,6 +280,7 @@ class WakeWordService:
             self.recorder.stop()
             
             # Start new conversation or reset existing one
+            self.reset_tts_state()  # Stop any previous audio
             self.conversation.start_conversation()
             self.emit("conversation_started")
             
@@ -287,6 +337,7 @@ class WakeWordService:
                     # Check for reset command
                     if self.is_reset_command(text):
                         self.emit("reset_detected", text=text)
+                        self.stop_current_tts() # Stop updated TTS
                         self.speak("Ket thuc hoi thoai")
                         break
                     
@@ -305,16 +356,19 @@ class WakeWordService:
                     # Get and speak LLM response
                     self.emit("debug", message="Getting LLM response...")
                     if self.llm_provider == "gemini":
-                        response = self.stream_gemini_response_with_context(text)
+                        # Gemini now handles TTS internally within the streaming function
+                        full_response = self.stream_gemini_response_with_context(text)
+                        if full_response:
+                            self.conversation.add_assistant_message(full_response)
                     else:
                         response = self.get_llm_response_with_context(text)
                         self.emit("llm_response", text=response)
-                        self.speak(response)
+                        self.tts_queue.put(response) # Use queue
+                        if response:
+                            self.conversation.add_assistant_message(response)
                     
-                    self.emit("debug", message=f"LLM done, response length: {len(response) if response else 0}")
-                    
-                    if response:
-                        self.conversation.add_assistant_message(response)
+                    # Wait for TTS queue to empty (conversation turn complete)
+                    self.tts_queue.join()
                     
                     # Emit that response is complete and ready for next turn
                     self.emit("response_complete")
@@ -323,7 +377,7 @@ class WakeWordService:
                     # Check if conversation is too long
                     if self.conversation.should_end_due_to_length():
                         self.emit("max_turns_reached")
-                        self.speak("Hoi thoai da kha dai, neu ban can tiep tuc, hay goi Hey Lens")
+                        self.speak("Hội thoại đã khá dài, nếu bạn cần tiếp tục, hãy gọi Hey Lens")
                         break
                     
                 except sr.UnknownValueError:
@@ -359,34 +413,22 @@ class WakeWordService:
         """Stream response from Gemini with conversation context and function calling"""
         try:
             import google.generativeai as genai
-            from google.generativeai.types import content_types
             
-            self.emit("debug", message="Starting Gemini API call with function calling...")
+            self.emit("debug", message="Starting Gemini API call (Streaming)...")
             
             genai.configure(api_key=self.llm_api_key)
             
             # System instruction
-            # Get current time for system context
             import datetime
             now_str = datetime.datetime.now().strftime("%A, %d/%m/%Y %H:%M:%S")
             
-            # System instruction with dynamic time context
-            system_instruction = f"""Bạn là Lens, một trợ lý cá nhân thông minh và thân thiện được tạo bởi Gia.
-THÔNG TIN NGỮ CẢNH QUAN TRỌNG:
-- Thời gian hệ thống hiện tại là: {now_str}
-- Bạn PHẢI sử dụng mốc thời gian này để xác định 'hôm nay', 'ngày mai', 'hôm qua'.
-- Ví dụ: Nếu hôm nay là 07/02, thì ngày mai TỨC LÀ 08/02. Đừng nhầm lẫn điều này.
-
-Bạn có quyền truy cập vào các công cụ để lấy dự báo thời tiết và thông tin ngày lễ.
-
-QUY TẮC QUAN TRỌNG:
-- Luôn trả lời bằng ngôn ngữ của người dùng (thường là tiếng Việt).
-- KHÔNG sử dụng định dạng markdown (không dùng *, **, _, v.v.) vì đây là đầu ra giọng nói.
-- Trả lời tự nhiên, đầy đủ, thân thiện.
-- Khi người dùng hỏi về thời tiết, ngày lễ: HÃY LUÔN DÙNG TOOL.
-- QUAN TRỌNG: Nếu người dùng phản hồi rằng thông tin bạn đưa ra là SAI (ví dụ sai ngày, sai giờ), ĐỪNG CHỈ XIN LỖI. Hãy GỌI LẠI TOOL để kiểm tra và đưa ra thông tin đúng.
-- Khi xem dự báo thời tiết (dạng list), hãy chọn ĐÚNG NGÀY mà người dùng hỏi (so sánh field 'date' với ngày bạn tính toán được). Đừng lấy mặc định phần tử đầu tiên.
-"""
+            system_instruction = f"""Bạn là Lens, một trợ lý cá nhân thông minh.
+THÔNG TIN: {now_str}
+QUY TẮC:
+- Trả lời ngắn gọn, tự nhiên bằng tiếng Việt.
+- KHÔNG dùng markdown (*, _).
+- Dùng tool cho thời tiết, ngày lễ.
+- Nếu thông tin sai, hãy kiểm tra lại bằng tool."""
 
             # Create model with tools
             model = genai.GenerativeModel(
@@ -395,141 +437,139 @@ QUY TẮC QUAN TRỌNG:
                 system_instruction=system_instruction
             )
             
-            # Build proper conversation history for Gemini
+            # Build history
             gemini_history = []
-            for msg in self.conversation.history[:-1]: # History except current message
+            for msg in self.conversation.history[:-1]:
                 role = "user" if msg["role"] == "user" else "model"
                 gemini_history.append({"role": role, "parts": [msg["content"]]})
             
-            # Start chat with history
             chat = model.start_chat(history=gemini_history, enable_automatic_function_calling=False)
             
-            self.emit("debug", message=f"Calling Gemini API with {len(gemini_history)} turns of history...")
-            response = chat.send_message(
-                text,
-                generation_config={"max_output_tokens": 800}
+            # 1. Send message with STREAMING enabled
+            # Explicitly set max_output_tokens to prevent early truncation
+            response_stream = chat.send_message(
+                text, 
+                stream=True,
+                generation_config={"max_output_tokens": 2048}
             )
             
-            # Check if Gemini wants to call a function
-            full_response = None
+            full_text = ""
+            sentence_buffer = ""
+            function_calls = []
             
-            # Process response - may contain function calls
-            if response.candidates and len(response.candidates) > 0:
-                candidate = response.candidates[0]
-                
-                # Check for function calls in the response
-                function_calls = []
-                text_parts = []
-                
-                if candidate.content and candidate.content.parts:
-                    for part in candidate.content.parts:
-                        if hasattr(part, 'function_call') and part.function_call:
+            # Handle the stream
+            for chunk in response_stream:
+                # Check for function calls
+                if chunk.candidates and chunk.candidates[0].content.parts:
+                    for part in chunk.candidates[0].content.parts:
+                        if part.function_call:
                             function_calls.append(part.function_call)
-                        elif hasattr(part, 'text') and part.text:
-                            text_parts.append(part.text)
                 
-                # If there are function calls, execute them
+                # If we found function calls, drain the rest of the stream and continue
                 if function_calls:
-                    self.emit("debug", message=f"Found {len(function_calls)} function call(s)")
-                    
-                    # Process each function call
-                    function_responses = []
-                    for fc in function_calls:
-                        tool_name = fc.name
-                        tool_args = dict(fc.args) if fc.args else {}
-                        
-                        self.emit("debug", message=f"Executing tool: {tool_name} with args: {tool_args}")
-                        
-                        # Execute the tool
-                        tool_result = self.agent_tools.execute_tool(tool_name, tool_args)
-                        self.emit("debug", message=f"Tool result: {json.dumps(tool_result, ensure_ascii=False)[:200]}...")
-                        
-                        function_responses.append({
-                            "name": tool_name,
-                            "response": tool_result
-                        })
-                    
-                    # Send function results back to Gemini
-                    self.emit("debug", message="Getting final response after tool execution...")
-                    
-                    # Build function response parts
-                    parts_to_send = []
-                    for fr in function_responses:
-                        parts_to_send.append({
-                            "function_response": {
-                                "name": fr["name"],
-                                "response": {"result": json.dumps(fr["response"], ensure_ascii=False)}
-                            }
-                        })
-                    
-                    try:
-                        final_response = chat.send_message(
-                            parts_to_send,
-                            generation_config={"max_output_tokens": 500}
-                        )
-                    except Exception as e:
-                        self.emit("debug", message=f"Error sending function response: {e}, using fallback")
-                        tool_summary = f"Kết quả công cụ: {json.dumps(function_responses[0]['response'], ensure_ascii=False)}"
-                        final_response = chat.send_message(
-                            f"Kết quả tra cứu là: {tool_summary}. Hãy trả lời người dùng một cách tự nhiên và đầy đủ.",
-                            generation_config={"max_output_tokens": 500}
-                        )
-                    
-                    # Extract text from final response
-                    if final_response.candidates and len(final_response.candidates) > 0:
-                        final_candidate = final_response.candidates[0]
-                        if final_candidate.content and final_candidate.content.parts:
-                            for part in final_candidate.content.parts:
-                                if hasattr(part, 'text') and part.text:
-                                    full_response = part.text
-                                    break
+                    continue
                 
-                # If no function calls, use the text response directly
-                if not full_response and text_parts:
-                    full_response = " ".join(text_parts)
+                # Process Text content
+                # Use safety check for candidates before accessing text
+                if chunk.candidates and chunk.candidates[0].content.parts:
+                    try:
+                        token = chunk.text
+                    except ValueError:
+                        # Handle cases where chunk has no text (e.g. safety block or other finish reason)
+                        continue
+                        
+                    full_text += token
+                    sentence_buffer += token
+                    
+                    # Split into sentences for shorter TTS latency
+                    # Check for punctuation marks: . ? ! ; sent_end
+                    import re
+                    # Split by sentence endings, keeping the ending
+                    parts = re.split(r'([.?!;]+)', sentence_buffer)
+                    
+                    if len(parts) > 1:
+                        # We have complete sentences
+                        for i in range(0, len(parts) - 1, 2):
+                            sentence = parts[i] + parts[i+1]
+                            clean_sent = self.clean_text_for_tts(sentence)
+                            if clean_sent:
+                                self.tts_queue.put(clean_sent)
+                                self.emit("llm_response", text=clean_sent + " ") # Emit incremental text
+                        
+                        # Keep the remainder
+                        sentence_buffer = parts[-1]
             
-            # Fallback if no response
-            if not full_response:
-                try:
-                    full_response = response.text
-                except:
-                    full_response = "Xin lỗi, tôi không thể trả lời lúc này."
+            # If there were function calls, we need to execute them and get the FINAL answer
+            if function_calls:
+                self.emit("debug", message=f"Processing {len(function_calls)} function call(s)...")
+                
+                # Execute tools
+                function_responses = []
+                for fc in function_calls:
+                    tool_name = fc.name
+                    tool_args = dict(fc.args)
+                    self.emit("debug", message=f"Calling {tool_name} with {tool_args}...")
+                    result = self.agent_tools.execute_tool(tool_name, tool_args)
+                    function_responses.append({
+                        "name": tool_name,
+                        "response": result
+                    })
+                
+                # Send tool results back to Gemini (Streaming again)
+                parts_to_send = []
+                for fr in function_responses:
+                    parts_to_send.append({
+                        "function_response": {
+                            "name": fr["name"],
+                            "response": {"result": json.dumps(fr["response"], ensure_ascii=False)}
+                        }
+                    })
+                
+                # Stream the final response after tool execution
+                final_stream = chat.send_message(
+                    parts_to_send, 
+                    stream=True, 
+                    generation_config={"max_output_tokens": 2048}
+                )
+                
+                # Reset buffers for final response
+                full_text = ""  # Reset full_text because the previous text (if any) was likely just thought process or discarded
+                sentence_buffer = ""
+                
+                for chunk in final_stream:
+                    if chunk.candidates and chunk.candidates[0].content.parts:
+                        try:
+                            token = chunk.text
+                        except ValueError:
+                            continue
+                            
+                        full_text += token
+                        sentence_buffer += token
+                        
+                        parts = re.split(r'([.?!;]+)', sentence_buffer)
+                        if len(parts) > 1:
+                            for i in range(0, len(parts) - 1, 2):
+                                sentence = parts[i] + parts[i+1]
+                                clean_sent = self.clean_text_for_tts(sentence)
+                                if clean_sent:
+                                    self.tts_queue.put(clean_sent)
+                                    self.emit("llm_response", text=clean_sent + " ")
+                            sentence_buffer = parts[-1]
             
-            self.emit("debug", message=f"Got response: {full_response[:100] if full_response else 'None'}...")
+            # Process any remaining text in buffer
+            if sentence_buffer:
+                clean_sent = self.clean_text_for_tts(sentence_buffer)
+                if clean_sent:
+                    self.tts_queue.put(clean_sent)
+                    self.emit("llm_response", text=clean_sent)
             
-            # Emit full response for display
-            self.emit("llm_response", text=full_response)
-            
-            # Clean and speak the response
-            clean_response = self.clean_text_for_tts(full_response)
-            self.emit("debug", message=f"Speaking cleaned response...")
-            
-            try:
-                self.speak(clean_response)
-                self.emit("debug", message="Done speaking")
-            except Exception as speak_err:
-                self.emit("debug", message=f"TTS error (continuing): {speak_err}")
-            
-            return full_response
-            
+            return full_text
+
         except Exception as e:
-            self.emit("debug", message=f"Gemini Error: {str(e)}")
-            error_msg = str(e).lower()
-            fallback_response = "Không thể kết nối AI."
-            try:
-                if "quota" in error_msg or "429" in str(e):
-                    fallback_response = "API hết hạn mức."
-                    self.speak(fallback_response)
-                elif "api_key" in error_msg or "401" in str(e):
-                    fallback_response = "API key không hợp lệ."
-                    self.speak(fallback_response)
-                else:
-                    self.speak(fallback_response)
-            except:
-                pass
-            self.emit("error", message=str(e))
-            return fallback_response
-    
+            self.emit("error", message=f"Gemini Streaming Error: {e}")
+            fallback = "Xin lỗi, có lỗi xảy ra."
+            self.tts_queue.put(fallback)
+            return fallback    
     def get_llm_response_with_context(self, text):
         """Get response from LLM with conversation context (non-streaming)"""
         if self.llm_provider == "gemini":
@@ -665,7 +705,7 @@ QUY TẮC QUAN TRỌNG:
                 # Try to use mpv for true streaming playback
                 # mpv can read from stdin and play immediately as data arrives
                 try:
-                    mpv_process = subprocess.Popen(
+                    self.current_tts_process = subprocess.Popen(
                         ["mpv", "--no-terminal", "--no-video", "-"],
                         stdin=subprocess.PIPE,
                         stdout=subprocess.DEVNULL,
@@ -674,11 +714,14 @@ QUY TẮC QUAN TRỌNG:
                     
                     async for chunk in communicate.stream():
                         if chunk["type"] == "audio":
-                            mpv_process.stdin.write(chunk["data"])
-                            mpv_process.stdin.flush()
+                            if self.current_tts_process: # Check if process still active
+                                self.current_tts_process.stdin.write(chunk["data"])
+                                self.current_tts_process.stdin.flush()
                     
-                    mpv_process.stdin.close()
-                    mpv_process.wait()
+                    if self.current_tts_process:
+                        self.current_tts_process.stdin.close()
+                        self.current_tts_process.wait()
+                        self.current_tts_process = None
                     
                 except FileNotFoundError:
                     # mpv not found, fallback to buffered pygame playback
