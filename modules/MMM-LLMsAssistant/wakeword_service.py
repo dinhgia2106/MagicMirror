@@ -378,13 +378,13 @@ class WakeWordService:
         except Exception as e:
             self.emit("debug", message=f"Gemini Error: {str(e)}")
             error_msg = str(e).lower()
-            fallback_response = "Khong the ket noi AI."
+            fallback_response = "Không thể kết nối AI."
             try:
                 if "quota" in error_msg or "429" in str(e):
-                    fallback_response = "API het han muc."
+                    fallback_response = "API hết hạn mức."
                     self.speak(fallback_response)
                 elif "api_key" in error_msg or "401" in str(e):
-                    fallback_response = "API key khong hop le."
+                    fallback_response = "API key không hợp lệ."
                     self.speak(fallback_response)
                 else:
                     self.speak(fallback_response)

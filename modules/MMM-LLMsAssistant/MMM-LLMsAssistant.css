@@ -31,11 +31,11 @@
 
 /* Idle state */
 .assistant-orb.idle {
-    border-color: #0f3460;
+    border-color: #444444;
 }
 
 .assistant-orb.idle::before {
-    background: #4a9fff;
+    background: #888888;
     animation: pulse-idle 3s infinite;
 }
 
