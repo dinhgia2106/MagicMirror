@@ -101,6 +101,21 @@ module.exports = NodeHelper.create({
                 this.sendSocketNotification("WAKE_WORD_DETECTED", {});
                 break;
 
+            case "conversation_started":
+                console.log("[MMM-LLMsAssistant] Conversation started");
+                this.sendSocketNotification("CONVERSATION_STARTED", {});
+                break;
+
+            case "conversation_ended":
+                console.log("[MMM-LLMsAssistant] Conversation ended");
+                this.sendSocketNotification("CONVERSATION_ENDED", {});
+                break;
+
+            case "listening":
+                console.log("[MMM-LLMsAssistant] Listening...");
+                this.sendSocketNotification("LISTENING", {});
+                break;
+
             case "speech":
                 console.log(`[MMM-LLMsAssistant] Speech: ${event.text}`);
                 this.sendSocketNotification("SPEECH_RECOGNIZED", { text: event.text });
@@ -112,7 +127,37 @@ module.exports = NodeHelper.create({
                 break;
 
             case "speech_complete":
+                console.log("[MMM-LLMsAssistant] Speech complete - conversation ended");
                 this.sendSocketNotification("SPEECH_COMPLETE", {});
+                break;
+
+            case "response_complete":
+                console.log("[MMM-LLMsAssistant] Response complete - ready for next input");
+                this.sendSocketNotification("RESPONSE_COMPLETE", {});
+                break;
+
+            case "silence_timeout":
+                console.log("[MMM-LLMsAssistant] Silence timeout - ending conversation");
+                this.sendSocketNotification("SILENCE_TIMEOUT", {});
+                break;
+
+            case "noise_timeout":
+                console.log("[MMM-LLMsAssistant] Noise timeout - ending conversation");
+                this.sendSocketNotification("NOISE_TIMEOUT", {});
+                break;
+
+            case "reset_detected":
+                console.log(`[MMM-LLMsAssistant] Reset detected: ${event.text}`);
+                this.sendSocketNotification("RESET_DETECTED", { text: event.text });
+                break;
+
+            case "max_turns_reached":
+                console.log("[MMM-LLMsAssistant] Max conversation turns reached");
+                this.sendSocketNotification("MAX_TURNS_REACHED", {});
+                break;
+
+            case "debug":
+                console.log(`[MMM-LLMsAssistant] DEBUG: ${event.message}`);
                 break;
 
             case "error":
