@@ -408,7 +408,7 @@ class AgentTools:
                 if diff_days == 0:
                     relative_day = "HOM NAY (Today)"
                 elif diff_days == 1:
-                    relative_day = "NGAY MAI (Tomorrow" 
+                    relative_day = "NGAY MAI (Tomorrow)" 
                 elif diff_days == 2:
                     relative_day = "NGAY KIA"
                 else:
