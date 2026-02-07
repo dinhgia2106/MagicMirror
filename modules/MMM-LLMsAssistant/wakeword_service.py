@@ -92,12 +92,15 @@ class WakeWordService:
                     text = self.recognizer.recognize_google(audio, language="vi-VN")
                     self.emit("speech", text=text)
                     
-                    # Get LLM response
-                    response = self.get_llm_response(text)
-                    self.emit("llm_response", text=response)
+                    # Use streaming LLM + realtime TTS for fast response
+                    if self.llm_provider == "gemini":
+                        self.stream_gemini_response(text)
+                    else:
+                        # Fallback to non-streaming
+                        response = self.get_llm_response(text)
+                        self.emit("llm_response", text=response)
+                        self.speak(response)
                     
-                    # Speak response
-                    self.speak(response)
                     self.emit("speech_complete")
                     
                 except sr.WaitTimeoutError:
@@ -110,9 +113,65 @@ class WakeWordService:
         finally:
             # Restart Porcupine recorder
             self.recorder.start()
+    
+    def stream_gemini_response(self, text):
+        """Stream response from Gemini and speak sentence by sentence for realtime"""
+        try:
+            import google.generativeai as genai
+            import re
+            
+            genai.configure(api_key=self.llm_api_key)
+            model = genai.GenerativeModel('gemini-2.5-flash')
+            
+            # Use streaming response
+            response = model.generate_content(
+                f"You are Lens, a smart personal assistant created by Gia. Respond concisely. User: {text}",
+                stream=True
+            )
+            
+            buffer = ""
+            full_response = ""
+            # Pattern to detect sentence endings
+            sentence_end = re.compile(r'[.!?。]\s*')
+            
+            for chunk in response:
+                if chunk.text:
+                    buffer += chunk.text
+                    full_response += chunk.text
+                    
+                    # Check for complete sentences
+                    while True:
+                        match = sentence_end.search(buffer)
+                        if match:
+                            # Extract complete sentence
+                            sentence = buffer[:match.end()].strip()
+                            buffer = buffer[match.end():]
+                            
+                            if sentence:
+                                # Speak this sentence immediately
+                                self.speak(sentence)
+                        else:
+                            break
+            
+            # Speak any remaining text
+            if buffer.strip():
+                self.speak(buffer.strip())
+            
+            # Emit full response for display
+            self.emit("llm_response", text=full_response)
+            
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "quota" in error_msg or "429" in str(e):
+                self.speak("API quota exceeded. Please try again later.")
+            elif "api_key" in error_msg or "401" in str(e):
+                self.speak("Invalid API key.")
+            else:
+                self.speak("Cannot connect to AI service.")
+            self.emit("error", message=str(e))
             
     def get_llm_response(self, text):
-        """Get response from LLM"""
+        """Get response from LLM (non-streaming fallback)"""
         if self.llm_provider == "gemini":
             return self.get_gemini_response(text)
         elif self.llm_provider == "openai":
@@ -121,7 +180,7 @@ class WakeWordService:
             return "LLM provider not configured"
             
     def get_gemini_response(self, text):
-        """Get response from Google Gemini"""
+        """Get response from Google Gemini (non-streaming)"""
         try:
             import google.generativeai as genai
             
@@ -129,7 +188,7 @@ class WakeWordService:
             model = genai.GenerativeModel('gemini-2.5-flash')
             
             response = model.generate_content(
-                f"You are Lens, a smart Vietnamese personal assistant created by Gia. User: {text}"
+                f"You are Lens, a smart Vietnamese personal assistant created by Gia. Respond concisely. User: {text}"
             )
             return response.text
         except Exception as e:
@@ -159,12 +218,76 @@ class WakeWordService:
             return f"Error: {str(e)}"
             
     def speak(self, text):
-        """Text-to-speech using edge-tts"""
+        """Text-to-speech using edge-tts with true realtime streaming playback"""
+        import asyncio
+        
+        async def stream_tts_realtime():
+            try:
+                import edge_tts
+                
+                # Use edge-tts streaming API
+                communicate = edge_tts.Communicate(text, self.voice_id)
+                
+                # Try to use mpv for true streaming playback
+                # mpv can read from stdin and play immediately as data arrives
+                try:
+                    mpv_process = subprocess.Popen(
+                        ["mpv", "--no-terminal", "--no-video", "-"],
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    
+                    async for chunk in communicate.stream():
+                        if chunk["type"] == "audio":
+                            mpv_process.stdin.write(chunk["data"])
+                            mpv_process.stdin.flush()
+                    
+                    mpv_process.stdin.close()
+                    mpv_process.wait()
+                    
+                except FileNotFoundError:
+                    # mpv not found, fallback to buffered pygame playback
+                    import pygame
+                    pygame.mixer.init(frequency=24000)
+                    
+                    temp_path = tempfile.mktemp(suffix=".mp3")
+                    
+                    with open(temp_path, "wb") as f:
+                        async for chunk in communicate.stream():
+                            if chunk["type"] == "audio":
+                                f.write(chunk["data"])
+                    
+                    pygame.mixer.music.load(temp_path)
+                    pygame.mixer.music.play()
+                    while pygame.mixer.music.get_busy():
+                        pygame.time.wait(50)
+                    pygame.mixer.quit()
+                    
+                    os.unlink(temp_path)
+                    
+            except ImportError as e:
+                # Fallback to subprocess if edge_tts module not installed
+                self._speak_subprocess(text)
+            except Exception as e:
+                self.emit("error", message=f"TTS error: {str(e)}")
+        
+        # Run async function
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(stream_tts_realtime())
+            loop.close()
+        except Exception as e:
+            self.emit("error", message=f"TTS async error: {str(e)}")
+    
+    def _speak_subprocess(self, text):
+        """Fallback TTS using subprocess"""
         try:
             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
                 temp_path = f.name
                 
-            # Generate speech with edge-tts
+            # Generate speech with edge-tts CLI
             subprocess.run([
                 "edge-tts",
                 "--voice", self.voice_id,
@@ -172,7 +295,7 @@ class WakeWordService:
                 "--write-media", temp_path
             ], check=True, capture_output=True)
             
-            # Play audio using pygame (cross-platform)
+            # Play audio using pygame
             try:
                 import pygame
                 pygame.mixer.init()
@@ -182,25 +305,17 @@ class WakeWordService:
                     pygame.time.wait(100)
                 pygame.mixer.quit()
             except ImportError:
-                # Fallback to playsound
-                try:
-                    from playsound import playsound
-                    playsound(temp_path)
-                except ImportError:
-                    # Last fallback - platform specific
-                    if sys.platform == "win32":
-                        import winsound
-                        # Convert mp3 to wav for winsound (or use ffplay)
-                        subprocess.run(["ffplay", "-nodisp", "-autoexit", temp_path], 
-                                      capture_output=True)
-                    elif sys.platform == "darwin":
-                        os.system(f'afplay "{temp_path}"')
-                    else:
-                        os.system(f'mpg123 -q "{temp_path}" 2>/dev/null || ffplay -nodisp -autoexit "{temp_path}" 2>/dev/null')
+                if sys.platform == "win32":
+                    subprocess.run(["ffplay", "-nodisp", "-autoexit", temp_path], 
+                                  capture_output=True)
+                elif sys.platform == "darwin":
+                    os.system(f'afplay "{temp_path}"')
+                else:
+                    os.system(f'mpg123 -q "{temp_path}" 2>/dev/null || ffplay -nodisp -autoexit "{temp_path}" 2>/dev/null')
                 
             os.unlink(temp_path)
         except Exception as e:
-            self.emit("error", message=f"TTS error: {str(e)}")
+            self.emit("error", message=f"TTS subprocess error: {str(e)}")
             
     def cleanup(self):
         """Cleanup resources"""
