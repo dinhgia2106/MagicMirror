@@ -129,7 +129,7 @@ class WakeWordService:
             model = genai.GenerativeModel('gemini-2.5-flash')
             
             response = model.generate_content(
-                f"You are a helpful Vietnamese assistant named Lens. Respond concisely in Vietnamese. User: {text}"
+                f"You are Lens, a smart Vietnamese personal assistant created by Gia. User: {text}"
             )
             return response.text
         except Exception as e:
@@ -150,7 +150,7 @@ class WakeWordService:
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are a helpful Vietnamese assistant named Lens. Respond concisely in Vietnamese."},
+                    {"role": "system", "content": "You are Lens, a smart Vietnamese assistant created by Gia. Respond concisely and helpfully in Vietnamese."},
                     {"role": "user", "content": text}
                 ]
             )
