@@ -123,10 +123,11 @@ class WakeWordService:
             genai.configure(api_key=self.llm_api_key)
             model = genai.GenerativeModel('gemini-2.5-flash')
             
-            # Use streaming response
+            # Use streaming response with token limit
             response = model.generate_content(
                 f"You are Lens, a smart personal assistant created by Gia. Respond concisely. User: {text}",
-                stream=True
+                stream=True,
+                generation_config={"max_output_tokens": 500}
             )
             
             buffer = ""
@@ -188,7 +189,8 @@ class WakeWordService:
             model = genai.GenerativeModel('gemini-2.5-flash')
             
             response = model.generate_content(
-                f"You are Lens, a smart Vietnamese personal assistant created by Gia. Respond concisely. User: {text}"
+                f"You are Lens, a smart Vietnamese personal assistant created by Gia. Respond concisely. User: {text}",
+                generation_config={"max_output_tokens": 500}
             )
             return response.text
         except Exception as e:

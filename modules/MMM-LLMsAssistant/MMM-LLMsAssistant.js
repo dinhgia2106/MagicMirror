@@ -27,38 +27,10 @@ Module.register("MMM-LLMsAssistant", {
         const wrapper = document.createElement("div");
         wrapper.className = "llms-assistant";
 
-        // Status indicator
+        // Status indicator orb only
         const statusOrb = document.createElement("div");
         statusOrb.className = `assistant-orb ${this.state}`;
         wrapper.appendChild(statusOrb);
-
-        // Status text
-        const statusText = document.createElement("div");
-        statusText.className = "assistant-status";
-        statusText.innerHTML = this.getStatusText();
-        wrapper.appendChild(statusText);
-
-        // Transcript area
-        if (this.transcript || this.response) {
-            const transcriptArea = document.createElement("div");
-            transcriptArea.className = "assistant-transcript";
-
-            if (this.transcript) {
-                const userText = document.createElement("div");
-                userText.className = "user-text";
-                userText.innerHTML = this.transcript;
-                transcriptArea.appendChild(userText);
-            }
-
-            if (this.response) {
-                const aiText = document.createElement("div");
-                aiText.className = "ai-text";
-                aiText.innerHTML = this.response;
-                transcriptArea.appendChild(aiText);
-            }
-
-            wrapper.appendChild(transcriptArea);
-        }
 
         return wrapper;
     },
