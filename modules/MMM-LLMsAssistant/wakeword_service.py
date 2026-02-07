@@ -17,6 +17,12 @@ import threading
 import re
 import time
 
+# Force UTF-8 encoding for stdout/stderr on Windows
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
 # Import agent tools
 from agent_tools import AgentTools, get_gemini_tools, TOOL_DECLARATIONS
 
@@ -134,6 +140,7 @@ class WakeWordService:
         self.porcupine = None
         self.recorder = None
         self.recognizer = sr.Recognizer()
+        self.microphone = sr.Microphone()
         self.conversation = ConversationManager()
         
         # Initialize agent tools for function calling
@@ -145,9 +152,18 @@ class WakeWordService:
         })
         
     def emit(self, event_type, **kwargs):
-        """Emit JSON event to stdout for Node.js"""
-        event = {"type": event_type, **kwargs}
-        print(json.dumps(event), flush=True)
+        """Emit JSON event to stdout for Node.js - uses base64 for text to avoid Windows encoding issues"""
+        import base64
+        event = {"type": event_type}
+        for key, value in kwargs.items():
+            if isinstance(value, str):
+                # Base64 encode string values to avoid encoding issues
+                event[key] = base64.b64encode(value.encode('utf-8')).decode('ascii')
+                event[f"{key}_encoded"] = True
+            else:
+                event[key] = value
+        # Use ASCII-only JSON output
+        print(json.dumps(event, ensure_ascii=True), flush=True)
         
     def start(self):
         """Start wake word detection"""
@@ -164,6 +180,14 @@ class WakeWordService:
                 device_index=-1  # Default device
             )
             self.recorder.start()
+            
+            # Pre-adjust for ambient noise once at startup
+            try:
+                print("Adjusting for ambient noise...", file=sys.stderr)
+                with self.microphone as source:
+                    self.recognizer.adjust_for_ambient_noise(source, duration=0.8)
+            except Exception as e:
+                print(f"Ambient noise adjustment warning: {e}", file=sys.stderr)
             
             print(f"Listening for wake word... (sample rate: {self.porcupine.sample_rate})", file=sys.stderr)
             
@@ -210,6 +234,13 @@ class WakeWordService:
             self.conversation.start_conversation()
             self.emit("conversation_started")
             
+            # Quick ambient noise adjustment after wake word to ensure clear input
+            try:
+                with self.microphone as source:
+                    self.recognizer.adjust_for_ambient_noise(source, duration=0.2)
+            except:
+                pass
+                
             # Enter conversation loop
             self.conversation_loop()
                     
@@ -228,14 +259,13 @@ class WakeWordService:
         
         while self.conversation.is_active:
             try:
-                # Small delay to let audio system settle after TTS
-                time.sleep(0.8)
+                # Reduced delay to minimize lost words at start of sentence
+                time.sleep(0.15)
                 
-                # Create new microphone instance each iteration
-                mic = sr.Microphone()
-                
-                with mic as source:
-                    self.recognizer.adjust_for_ambient_noise(source, duration=0.3)
+                # Use pre-initialized microphone
+                with self.microphone as source:
+                    # Very short adjustment to handle immediate room noise changes
+                    self.recognizer.adjust_for_ambient_noise(source, duration=0.1)
                     self.emit("listening")
                     
                     try:
@@ -335,24 +365,18 @@ class WakeWordService:
             
             genai.configure(api_key=self.llm_api_key)
             
-            # Build conversation history for Gemini
-            context = self.conversation.get_context_prompt()
-            system_instruction = """You are Lens, a smart personal assistant created by Gia. 
-You have access to tools to get current date/time, weather, and holiday information.
-IMPORTANT RULES:
-- Respond in language of user
-- Do NOT use markdown formatting (no *, **, _, etc.)
-- Keep responses concise and natural for voice output
-- When user asks about time, date, weather, or holidays, USE THE APPROPRIATE TOOL first
-- After getting tool results, summarize the information naturally in Vietnamese
+            # System instruction
+            system_instruction = """Bạn là Lens, một trợ lý cá nhân thông minh và thân thiện được tạo bởi Gia.
+Bạn có quyền truy cập vào các công cụ để lấy ngày/giờ hiện tại, thời tiết và thông tin ngày lễ.
 
-Examples of when to use tools:
-- "Mấy giờ rồi?" or "Bao nhiêu giờ?" -> use get_current_datetime
-- "Hôm nay là ngày mấy?" or "Thứ mấy?" -> use get_current_datetime
-- "Thời tiết thế nào?" or "Nhiệt độ?" -> use get_current_weather
-- "Dự báo thời tiết" -> use get_weather_forecast
-- "Ngày lễ nào sắp tới?" -> use get_upcoming_holidays
-- "Tháng 9 có ngày lễ gì?" -> use get_holidays with month=9"""
+QUY TẮC QUAN TRỌNG:
+- Luôn trả lời bằng ngôn ngữ của người dùng (thường là tiếng Việt).
+- KHÔNG sử dụng định dạng markdown (không dùng *, **, _, v.v.) vì đây là đầu ra giọng nói.
+- Trả lời một cách tự nhiên, đầy đủ và thân thiện như đang trò chuyện trực diện. 
+- Hãy là một người bạn đồng hành hữu ích, tránh trả lời quá ngắn gọn hoặc cụt lủn.
+- Khi người dùng hỏi về thời gian, ngày tháng, thời tiết hoặc ngày lễ, hãy LUÔN SỬ DỤNG CÔNG CỤ PHÙ HỢP trước.
+- Sau khi nhận được kết quả từ công cụ, hãy tóm tắt thông tin một cách tự nhiên bằng tiếng Việt.
+"""
 
             # Create model with tools
             model = genai.GenerativeModel(
@@ -361,19 +385,19 @@ Examples of when to use tools:
                 system_instruction=system_instruction
             )
             
-            # Start chat or continue conversation
-            chat = model.start_chat(enable_automatic_function_calling=False)
+            # Build proper conversation history for Gemini
+            gemini_history = []
+            for msg in self.conversation.history[:-1]: # History except current message
+                role = "user" if msg["role"] == "user" else "model"
+                gemini_history.append({"role": role, "parts": [msg["content"]]})
             
-            # Build user message
-            if context:
-                user_message = f"Previous context:\n{context}\n\nUser's current request: {text}"
-            else:
-                user_message = text
+            # Start chat with history
+            chat = model.start_chat(history=gemini_history, enable_automatic_function_calling=False)
             
-            self.emit("debug", message="Calling Gemini API...")
+            self.emit("debug", message=f"Calling Gemini API with {len(gemini_history)} turns of history...")
             response = chat.send_message(
-                user_message,
-                generation_config={"max_output_tokens": 500}
+                text,
+                generation_config={"max_output_tokens": 800}
             )
             
             # Check if Gemini wants to call a function
@@ -415,52 +439,31 @@ Examples of when to use tools:
                             "response": tool_result
                         })
                     
-                    # Send function results back to Gemini using the correct format
-                    # Build function response parts for the chat
+                    # Send function results back to Gemini
                     self.emit("debug", message="Getting final response after tool execution...")
                     
-                    # Create function response content - use dict format that works with newer SDK
-                    function_response_content = []
+                    # Build function response parts
+                    parts_to_send = []
                     for fr in function_responses:
-                        function_response_content.append({
+                        parts_to_send.append({
                             "function_response": {
                                 "name": fr["name"],
                                 "response": {"result": json.dumps(fr["response"], ensure_ascii=False)}
                             }
                         })
                     
-                    # Try different methods based on SDK version
                     try:
-                        # Method 1: Use Content type if available
-                        from google.generativeai.types import content_types
                         final_response = chat.send_message(
-                            content_types.to_content(function_response_content),
-                            generation_config={"max_output_tokens": 300}
+                            parts_to_send,
+                            generation_config={"max_output_tokens": 500}
                         )
-                    except Exception as content_err:
-                        self.emit("debug", message=f"Content method failed: {content_err}, trying alternative...")
-                        # Method 2: Send as plain dict with parts
-                        try:
-                            parts_list = []
-                            for fr in function_responses:
-                                parts_list.append({
-                                    "functionResponse": {
-                                        "name": fr["name"],
-                                        "response": {"result": json.dumps(fr["response"], ensure_ascii=False)}
-                                    }
-                                })
-                            final_response = chat.send_message(
-                                {"parts": parts_list},
-                                generation_config={"max_output_tokens": 300}
-                            )
-                        except Exception as dict_err:
-                            self.emit("debug", message=f"Dict method failed: {dict_err}, using summary...")
-                            # Method 3: Fallback - just send a summary of the tool result
-                            tool_summary = f"Tool results: {json.dumps(function_responses[0]['response'], ensure_ascii=False)}"
-                            final_response = chat.send_message(
-                                f"Based on the following tool output, provide a natural response to the user: {tool_summary}",
-                                generation_config={"max_output_tokens": 300}
-                            )
+                    except Exception as e:
+                        self.emit("debug", message=f"Error sending function response: {e}, using fallback")
+                        tool_summary = f"Kết quả công cụ: {json.dumps(function_responses[0]['response'], ensure_ascii=False)}"
+                        final_response = chat.send_message(
+                            f"Kết quả tra cứu là: {tool_summary}. Hãy trả lời người dùng một cách tự nhiên và đầy đủ.",
+                            generation_config={"max_output_tokens": 500}
+                        )
                     
                     # Extract text from final response
                     if final_response.candidates and len(final_response.candidates) > 0:
@@ -480,7 +483,7 @@ Examples of when to use tools:
                 try:
                     full_response = response.text
                 except:
-                    full_response = "Xin loi, toi khong the tra loi cau hoi nay."
+                    full_response = "Xin lỗi, tôi không thể trả lời lúc này."
             
             self.emit("debug", message=f"Got response: {full_response[:100] if full_response else 'None'}...")
             

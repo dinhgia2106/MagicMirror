@@ -1,6 +1,15 @@
 const NodeHelper = require("node_helper");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, execSync } = require("child_process");
+
+// Set Windows console to UTF-8 for Vietnamese support
+if (process.platform === "win32") {
+    try {
+        execSync("chcp 65001", { stdio: "ignore" });
+    } catch (e) {
+        // Ignore errors
+    }
+}
 
 module.exports = NodeHelper.create({
     config: null,
@@ -56,17 +65,27 @@ module.exports = NodeHelper.create({
         console.log(`[MMM-LLMsAssistant] Starting wake word detection...`);
         console.log(`[MMM-LLMsAssistant] PPN path: ${ppnPath}`);
 
-        this.porcupineProcess = spawn("python", [
-            pythonScript,
-            "--access-key", this.config.picovoiceAccessKey,
-            "--ppn-path", ppnPath,
-            "--llm-provider", this.config.llmProvider,
-            "--llm-api-key", this.config.llmApiKey,
-            "--voice-id", this.config.voiceId
-        ]);
+        // Build command with chcp for UTF-8 support on Windows
+        const command = process.platform === "win32"
+            ? `chcp 65001 >nul && python "${pythonScript}" --access-key "${this.config.picovoiceAccessKey}" --ppn-path "${ppnPath}" --llm-provider ${this.config.llmProvider} --llm-api-key "${this.config.llmApiKey}" --voice-id ${this.config.voiceId}`
+            : `python "${pythonScript}" --access-key "${this.config.picovoiceAccessKey}" --ppn-path "${ppnPath}" --llm-provider ${this.config.llmProvider} --llm-api-key "${this.config.llmApiKey}" --voice-id ${this.config.voiceId}`;
+
+        this.porcupineProcess = spawn(command, [], {
+            shell: true,
+            env: {
+                ...process.env,
+                PYTHONIOENCODING: "utf-8",
+                PYTHONUTF8: "1"
+            },
+            windowsHide: true
+        });
+
+        // Set encoding to UTF-8 for Vietnamese support
+        this.porcupineProcess.stdout.setEncoding("utf8");
+        this.porcupineProcess.stderr.setEncoding("utf8");
 
         this.porcupineProcess.stdout.on("data", (data) => {
-            const lines = data.toString().trim().split("\n");
+            const lines = data.trim().split("\n");
             lines.forEach(line => {
                 try {
                     const event = JSON.parse(line);
@@ -94,6 +113,14 @@ module.exports = NodeHelper.create({
         });
     },
 
+    // Decode base64-encoded text fields from Python
+    decodeBase64Text: function (event, field) {
+        if (event[field + "_encoded"] && event[field]) {
+            return Buffer.from(event[field], "base64").toString("utf8");
+        }
+        return event[field] || "";
+    },
+
     handlePythonEvent: function (event) {
         switch (event.type) {
             case "wake_word":
@@ -116,15 +143,19 @@ module.exports = NodeHelper.create({
                 this.sendSocketNotification("LISTENING", {});
                 break;
 
-            case "speech":
-                console.log(`[MMM-LLMsAssistant] Speech: ${event.text}`);
-                this.sendSocketNotification("SPEECH_RECOGNIZED", { text: event.text });
+            case "speech": {
+                const text = this.decodeBase64Text(event, "text");
+                console.log(`[MMM-LLMsAssistant] Speech: ${text}`);
+                this.sendSocketNotification("SPEECH_RECOGNIZED", { text: text });
                 break;
+            }
 
-            case "llm_response":
-                console.log(`[MMM-LLMsAssistant] LLM: ${event.text}`);
-                this.sendSocketNotification("LLM_RESPONSE", { text: event.text });
+            case "llm_response": {
+                const text = this.decodeBase64Text(event, "text");
+                console.log(`[MMM-LLMsAssistant] LLM: ${text}`);
+                this.sendSocketNotification("LLM_RESPONSE", { text: text });
                 break;
+            }
 
             case "speech_complete":
                 console.log("[MMM-LLMsAssistant] Speech complete - conversation ended");
@@ -146,24 +177,30 @@ module.exports = NodeHelper.create({
                 this.sendSocketNotification("NOISE_TIMEOUT", {});
                 break;
 
-            case "reset_detected":
-                console.log(`[MMM-LLMsAssistant] Reset detected: ${event.text}`);
-                this.sendSocketNotification("RESET_DETECTED", { text: event.text });
+            case "reset_detected": {
+                const text = this.decodeBase64Text(event, "text");
+                console.log(`[MMM-LLMsAssistant] Reset detected: ${text}`);
+                this.sendSocketNotification("RESET_DETECTED", { text: text });
                 break;
+            }
 
             case "max_turns_reached":
                 console.log("[MMM-LLMsAssistant] Max conversation turns reached");
                 this.sendSocketNotification("MAX_TURNS_REACHED", {});
                 break;
 
-            case "debug":
-                console.log(`[MMM-LLMsAssistant] DEBUG: ${event.message}`);
+            case "debug": {
+                const message = this.decodeBase64Text(event, "message");
+                console.log(`[MMM-LLMsAssistant] DEBUG: ${message}`);
                 break;
+            }
 
-            case "error":
-                console.error(`[MMM-LLMsAssistant] ${event.message}`);
-                this.sendSocketNotification("ERROR", { message: event.message });
+            case "error": {
+                const message = this.decodeBase64Text(event, "message");
+                console.error(`[MMM-LLMsAssistant] ${message}`);
+                this.sendSocketNotification("ERROR", { message: message });
                 break;
+            }
         }
     },
 
