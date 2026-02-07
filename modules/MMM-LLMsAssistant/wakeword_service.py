@@ -17,6 +17,9 @@ import threading
 import re
 import time
 
+# Import agent tools
+from agent_tools import AgentTools, get_gemini_tools, TOOL_DECLARATIONS
+
 try:
     import pvporcupine
     from pvrecorder import PvRecorder
@@ -132,6 +135,14 @@ class WakeWordService:
         self.recorder = None
         self.recognizer = sr.Recognizer()
         self.conversation = ConversationManager()
+        
+        # Initialize agent tools for function calling
+        self.agent_tools = AgentTools({
+            "holiday_api_url": "http://192.168.1.11:8000/api/holidays",
+            "lat": 16.463713,
+            "lon": 107.590866,
+            "timezone": "Asia/Ho_Chi_Minh"
+        })
         
     def emit(self, event_type, **kwargs):
         """Emit JSON event to stdout for Node.js"""
@@ -315,50 +326,163 @@ class WakeWordService:
         return text.strip()
     
     def stream_gemini_response_with_context(self, text):
-        """Stream response from Gemini with conversation context"""
+        """Stream response from Gemini with conversation context and function calling"""
         try:
             import google.generativeai as genai
+            from google.generativeai.types import content_types
             
-            self.emit("debug", message="Starting Gemini API call...")
+            self.emit("debug", message="Starting Gemini API call with function calling...")
             
             genai.configure(api_key=self.llm_api_key)
-            model = genai.GenerativeModel('gemini-2.5-flash')
             
-            # Build prompt with conversation context
+            # Build conversation history for Gemini
             context = self.conversation.get_context_prompt()
-            system_prompt = "You are Lens, a smart Vietnamese personal assistant created by Gia. Respond concisely and naturally in Vietnamese. Do NOT use markdown formatting. Keep the conversation flowing."
-            
-            if context:
-                prompt = f"{system_prompt}\n\n{context}\nUser: {text}\nLens:"
-            else:
-                prompt = f"{system_prompt}\n\nUser: {text}\nLens:"
-            
-            # Use NON-streaming to avoid TTS conflicts
-            self.emit("debug", message="Calling Gemini API...")
-            response = model.generate_content(
-                prompt,
-                generation_config={"max_output_tokens": 300}
+            system_instruction = """You are Lens, a smart personal assistant created by Gia. 
+You have access to tools to get current date/time, weather, and holiday information.
+IMPORTANT RULES:
+- Respond in language of user
+- Do NOT use markdown formatting (no *, **, _, etc.)
+- Keep responses concise and natural for voice output
+- When user asks about time, date, weather, or holidays, USE THE APPROPRIATE TOOL first
+- After getting tool results, summarize the information naturally in Vietnamese
+
+Examples of when to use tools:
+- "Mấy giờ rồi?" or "Bao nhiêu giờ?" -> use get_current_datetime
+- "Hôm nay là ngày mấy?" or "Thứ mấy?" -> use get_current_datetime
+- "Thời tiết thế nào?" or "Nhiệt độ?" -> use get_current_weather
+- "Dự báo thời tiết" -> use get_weather_forecast
+- "Ngày lễ nào sắp tới?" -> use get_upcoming_holidays
+- "Tháng 9 có ngày lễ gì?" -> use get_holidays with month=9"""
+
+            # Create model with tools
+            model = genai.GenerativeModel(
+                'gemini-2.5-flash',
+                tools=[get_gemini_tools()],
+                system_instruction=system_instruction
             )
             
-            # Check if response was blocked
-            full_response = None
-            try:
-                # Try to get response text
-                if response.candidates and len(response.candidates) > 0:
-                    candidate = response.candidates[0]
-                    if candidate.content and candidate.content.parts:
-                        full_response = candidate.content.parts[0].text
-                    else:
-                        # Response blocked - check safety ratings
-                        self.emit("debug", message=f"Response blocked. Safety ratings: {candidate.safety_ratings if hasattr(candidate, 'safety_ratings') else 'N/A'}")
-                        full_response = "Xin loi, toi khong the tra loi cau hoi nay."
-                else:
-                    full_response = response.text  # Fallback to simple accessor
-            except Exception as text_err:
-                self.emit("debug", message=f"Error getting response text: {text_err}")
-                full_response = "Xin loi, toi khong the tra loi cau hoi nay."
+            # Start chat or continue conversation
+            chat = model.start_chat(enable_automatic_function_calling=False)
             
-            self.emit("debug", message=f"Got response: {full_response[:50] if full_response else 'None'}...")
+            # Build user message
+            if context:
+                user_message = f"Previous context:\n{context}\n\nUser's current request: {text}"
+            else:
+                user_message = text
+            
+            self.emit("debug", message="Calling Gemini API...")
+            response = chat.send_message(
+                user_message,
+                generation_config={"max_output_tokens": 500}
+            )
+            
+            # Check if Gemini wants to call a function
+            full_response = None
+            
+            # Process response - may contain function calls
+            if response.candidates and len(response.candidates) > 0:
+                candidate = response.candidates[0]
+                
+                # Check for function calls in the response
+                function_calls = []
+                text_parts = []
+                
+                if candidate.content and candidate.content.parts:
+                    for part in candidate.content.parts:
+                        if hasattr(part, 'function_call') and part.function_call:
+                            function_calls.append(part.function_call)
+                        elif hasattr(part, 'text') and part.text:
+                            text_parts.append(part.text)
+                
+                # If there are function calls, execute them
+                if function_calls:
+                    self.emit("debug", message=f"Found {len(function_calls)} function call(s)")
+                    
+                    # Process each function call
+                    function_responses = []
+                    for fc in function_calls:
+                        tool_name = fc.name
+                        tool_args = dict(fc.args) if fc.args else {}
+                        
+                        self.emit("debug", message=f"Executing tool: {tool_name} with args: {tool_args}")
+                        
+                        # Execute the tool
+                        tool_result = self.agent_tools.execute_tool(tool_name, tool_args)
+                        self.emit("debug", message=f"Tool result: {json.dumps(tool_result, ensure_ascii=False)[:200]}...")
+                        
+                        function_responses.append({
+                            "name": tool_name,
+                            "response": tool_result
+                        })
+                    
+                    # Send function results back to Gemini using the correct format
+                    # Build function response parts for the chat
+                    self.emit("debug", message="Getting final response after tool execution...")
+                    
+                    # Create function response content - use dict format that works with newer SDK
+                    function_response_content = []
+                    for fr in function_responses:
+                        function_response_content.append({
+                            "function_response": {
+                                "name": fr["name"],
+                                "response": {"result": json.dumps(fr["response"], ensure_ascii=False)}
+                            }
+                        })
+                    
+                    # Try different methods based on SDK version
+                    try:
+                        # Method 1: Use Content type if available
+                        from google.generativeai.types import content_types
+                        final_response = chat.send_message(
+                            content_types.to_content(function_response_content),
+                            generation_config={"max_output_tokens": 300}
+                        )
+                    except Exception as content_err:
+                        self.emit("debug", message=f"Content method failed: {content_err}, trying alternative...")
+                        # Method 2: Send as plain dict with parts
+                        try:
+                            parts_list = []
+                            for fr in function_responses:
+                                parts_list.append({
+                                    "functionResponse": {
+                                        "name": fr["name"],
+                                        "response": {"result": json.dumps(fr["response"], ensure_ascii=False)}
+                                    }
+                                })
+                            final_response = chat.send_message(
+                                {"parts": parts_list},
+                                generation_config={"max_output_tokens": 300}
+                            )
+                        except Exception as dict_err:
+                            self.emit("debug", message=f"Dict method failed: {dict_err}, using summary...")
+                            # Method 3: Fallback - just send a summary of the tool result
+                            tool_summary = f"Tool results: {json.dumps(function_responses[0]['response'], ensure_ascii=False)}"
+                            final_response = chat.send_message(
+                                f"Based on the following tool output, provide a natural response to the user: {tool_summary}",
+                                generation_config={"max_output_tokens": 300}
+                            )
+                    
+                    # Extract text from final response
+                    if final_response.candidates and len(final_response.candidates) > 0:
+                        final_candidate = final_response.candidates[0]
+                        if final_candidate.content and final_candidate.content.parts:
+                            for part in final_candidate.content.parts:
+                                if hasattr(part, 'text') and part.text:
+                                    full_response = part.text
+                                    break
+                
+                # If no function calls, use the text response directly
+                if not full_response and text_parts:
+                    full_response = " ".join(text_parts)
+            
+            # Fallback if no response
+            if not full_response:
+                try:
+                    full_response = response.text
+                except:
+                    full_response = "Xin loi, toi khong the tra loi cau hoi nay."
+            
+            self.emit("debug", message=f"Got response: {full_response[:100] if full_response else 'None'}...")
             
             # Emit full response for display
             self.emit("llm_response", text=full_response)
@@ -420,7 +544,7 @@ class WakeWordService:
             
             response = model.generate_content(
                 prompt,
-                generation_config={"max_output_tokens": 500}
+                generation_config={"max_output_tokens": 700}
             )
             return response.text
         except Exception as e:
