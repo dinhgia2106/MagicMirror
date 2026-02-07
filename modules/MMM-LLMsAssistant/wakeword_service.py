@@ -150,7 +150,7 @@ class WakeWordService:
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are Lens, a smart Vietnamese assistant created by Gia. Respond concisely and helpfully in Vietnamese."},
+                    {"role": "system", "content": "You are Lens, a smart assistant created by Gia. Respond concisely and helpfully in Vietnamese."},
                     {"role": "user", "content": text}
                 ]
             )
