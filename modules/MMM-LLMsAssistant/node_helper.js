@@ -19,8 +19,26 @@ module.exports = NodeHelper.create({
     },
 
     startWakeWordDetection: function () {
+        const fs = require("fs");
         const pythonScript = path.join(__dirname, "wakeword_service.py");
-        const ppnPath = path.join(__dirname, "Picovoice_ppn", "Hey-lens_en_raspberry-pi_v4_0_0.ppn");
+        const ppnDir = path.join(__dirname, "Picovoice_ppn");
+
+        // Auto-detect .ppn file
+        let ppnPath = null;
+        try {
+            const files = fs.readdirSync(ppnDir);
+            const ppnFile = files.find(f => f.endsWith(".ppn"));
+            if (ppnFile) {
+                ppnPath = path.join(ppnDir, ppnFile);
+            }
+        } catch (e) {
+            console.error(`[MMM-LLMsAssistant] Error reading ppn directory: ${e}`);
+        }
+
+        if (!ppnPath) {
+            console.error("[MMM-LLMsAssistant] No .ppn file found in Picovoice_ppn folder!");
+            return;
+        }
 
         console.log(`[MMM-LLMsAssistant] Starting wake word detection...`);
         console.log(`[MMM-LLMsAssistant] PPN path: ${ppnPath}`);
