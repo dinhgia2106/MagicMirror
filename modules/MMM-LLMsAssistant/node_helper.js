@@ -6,6 +6,7 @@ module.exports = NodeHelper.create({
     config: null,
     porcupineProcess: null,
     isListening: false,
+    initialized: false,
 
     start: function () {
         console.log("Starting node_helper for: " + this.name);
@@ -13,12 +14,24 @@ module.exports = NodeHelper.create({
 
     socketNotificationReceived: function (notification, payload) {
         if (notification === "INIT") {
+            // Prevent multiple initializations
+            if (this.initialized) {
+                console.log("[MMM-LLMsAssistant] Already initialized, skipping duplicate INIT");
+                return;
+            }
+            this.initialized = true;
             this.config = payload;
             this.startWakeWordDetection();
         }
     },
 
     startWakeWordDetection: function () {
+        // Prevent multiple processes
+        if (this.porcupineProcess) {
+            console.log("[MMM-LLMsAssistant] Wake word detection already running, skipping");
+            return;
+        }
+
         const fs = require("fs");
         const pythonScript = path.join(__dirname, "wakeword_service.py");
         const ppnDir = path.join(__dirname, "Picovoice_ppn");
@@ -72,6 +85,8 @@ module.exports = NodeHelper.create({
 
         this.porcupineProcess.on("close", (code) => {
             console.log(`[MMM-LLMsAssistant] Process exited with code ${code}`);
+            // Reset process reference
+            this.porcupineProcess = null;
             // Restart after delay if unexpected exit
             if (code !== 0) {
                 setTimeout(() => this.startWakeWordDetection(), 5000);
