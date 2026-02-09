@@ -23,6 +23,8 @@ Module.register("MMM-SoundCloud", {
         this.volume = this.config.defaultVolume;
         this.previousVolume = this.volume;
         this.widgetReady = false;
+        this.currentPosition = 0;
+        this.duration = 0;
     },
 
     getDom: function () {
@@ -41,37 +43,93 @@ Module.register("MMM-SoundCloud", {
         iframe.src = `https://w.soundcloud.com/player/?url=${encodeURIComponent(this.config.playlistUrl)}&color=%23ff5500&auto_play=${this.config.autoPlay}&hide_related=true&show_comments=false&show_user=true&show_reposts=false&show_teaser=false&visual=${this.config.showArtwork}`;
         wrapper.appendChild(iframe);
 
-        // Custom player info
-        const playerInfo = document.createElement("div");
-        playerInfo.className = "player-info";
+        // Custom player UI
+        const playerUI = document.createElement("div");
+        playerUI.className = "player-ui";
 
-        // Track info
-        const trackInfo = document.createElement("div");
-        trackInfo.className = "track-info";
+        // Track info row
+        const trackRow = document.createElement("div");
+        trackRow.className = "track-row";
 
         const trackName = document.createElement("div");
         trackName.className = "track-name";
         trackName.id = "track-name";
         trackName.textContent = this.currentTrack ? this.currentTrack.title : "Loading...";
-        trackInfo.appendChild(trackName);
+        trackRow.appendChild(trackName);
 
+        playerUI.appendChild(trackRow);
+
+        // Artist row
         const artistName = document.createElement("div");
         artistName.className = "artist-name";
         artistName.id = "artist-name";
         artistName.textContent = this.currentTrack ? this.currentTrack.user.username : "";
-        trackInfo.appendChild(artistName);
+        playerUI.appendChild(artistName);
 
-        playerInfo.appendChild(trackInfo);
+        // Progress bar
+        const progressContainer = document.createElement("div");
+        progressContainer.className = "progress-container";
 
-        // Status indicator
-        const status = document.createElement("div");
-        status.className = `play-status ${this.isPaused ? "paused" : "playing"}`;
-        status.id = "play-status";
-        playerInfo.appendChild(status);
+        const progressBar = document.createElement("div");
+        progressBar.className = "progress-bar";
+        progressBar.id = "progress-bar";
+        const progress = this.duration > 0 ? (this.currentPosition / this.duration) * 100 : 0;
+        progressBar.style.width = progress + "%";
+        progressContainer.appendChild(progressBar);
 
-        wrapper.appendChild(playerInfo);
+        playerUI.appendChild(progressContainer);
+
+        // Time display
+        const timeRow = document.createElement("div");
+        timeRow.className = "time-row";
+
+        const currentTime = document.createElement("span");
+        currentTime.id = "current-time";
+        currentTime.textContent = this.formatTime(this.currentPosition);
+        timeRow.appendChild(currentTime);
+
+        const totalTime = document.createElement("span");
+        totalTime.id = "total-time";
+        totalTime.textContent = this.formatTime(this.duration);
+        timeRow.appendChild(totalTime);
+
+        playerUI.appendChild(timeRow);
+
+        // Controls row
+        const controlsRow = document.createElement("div");
+        controlsRow.className = "controls-row";
+
+        const prevBtn = document.createElement("button");
+        prevBtn.className = "control-btn";
+        prevBtn.innerHTML = "&#9664;&#9664;";
+        prevBtn.onclick = () => this.prev();
+        controlsRow.appendChild(prevBtn);
+
+        const playBtn = document.createElement("button");
+        playBtn.className = "control-btn play-btn";
+        playBtn.id = "play-btn";
+        playBtn.innerHTML = this.isPaused ? "&#9654;" : "&#10074;&#10074;";
+        playBtn.onclick = () => this.toggle();
+        controlsRow.appendChild(playBtn);
+
+        const nextBtn = document.createElement("button");
+        nextBtn.className = "control-btn";
+        nextBtn.innerHTML = "&#9654;&#9654;";
+        nextBtn.onclick = () => this.next();
+        controlsRow.appendChild(nextBtn);
+
+        playerUI.appendChild(controlsRow);
+
+        wrapper.appendChild(playerUI);
 
         return wrapper;
+    },
+
+    formatTime: function (ms) {
+        const seconds = Math.floor(ms / 1000);
+        const mins = Math.floor(seconds / 60);
+        const secs = seconds % 60;
+        return `${mins}:${secs.toString().padStart(2, '0')}`;
     },
 
     notificationReceived: function (notification, payload, sender) {
@@ -152,7 +210,10 @@ Module.register("MMM-SoundCloud", {
             this.updatePlayStatus();
         });
 
-        this.widget.bind(SC.Widget.Events.PLAY_PROGRESS, () => {
+        this.widget.bind(SC.Widget.Events.PLAY_PROGRESS, (data) => {
+            // Update position and progress bar
+            this.currentPosition = data.currentPosition;
+            this.updateProgress();
             // Update track info periodically
             this.updateTrackInfo();
         });
@@ -170,11 +231,15 @@ Module.register("MMM-SoundCloud", {
         this.widget.getCurrentSound((sound) => {
             if (sound && (!this.currentTrack || this.currentTrack.id !== sound.id)) {
                 this.currentTrack = sound;
+                this.duration = sound.duration || 0;
+
                 const trackNameEl = document.getElementById("track-name");
                 const artistNameEl = document.getElementById("artist-name");
+                const totalTimeEl = document.getElementById("total-time");
 
                 if (trackNameEl) trackNameEl.textContent = sound.title || "Unknown";
                 if (artistNameEl) artistNameEl.textContent = sound.user ? sound.user.username : "";
+                if (totalTimeEl) totalTimeEl.textContent = this.formatTime(this.duration);
 
                 // Broadcast track change
                 this.sendNotification("MUSIC_TRACK_CHANGED", {
@@ -186,10 +251,23 @@ Module.register("MMM-SoundCloud", {
         });
     },
 
+    updateProgress: function () {
+        const progressBar = document.getElementById("progress-bar");
+        const currentTimeEl = document.getElementById("current-time");
+
+        if (progressBar && this.duration > 0) {
+            const progress = (this.currentPosition / this.duration) * 100;
+            progressBar.style.width = progress + "%";
+        }
+        if (currentTimeEl) {
+            currentTimeEl.textContent = this.formatTime(this.currentPosition);
+        }
+    },
+
     updatePlayStatus: function () {
-        const statusEl = document.getElementById("play-status");
-        if (statusEl) {
-            statusEl.className = `play-status ${this.isPaused ? "paused" : "playing"}`;
+        const playBtn = document.getElementById("play-btn");
+        if (playBtn) {
+            playBtn.innerHTML = this.isPaused ? "&#9654;" : "&#10074;&#10074;";
         }
 
         this.sendNotification("MUSIC_STATE_CHANGED", {

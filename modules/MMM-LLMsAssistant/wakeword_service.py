@@ -41,20 +41,9 @@ except ImportError:
     sys.exit(1)
 
 
-# Reset command patterns (Vietnamese and English)
+# Reset command patterns - Only wake word resets conversation
 RESET_PATTERNS = [
     r"hey\s*lens",
-    r"reset",
-    r"tắt\s*(hội\s*thoại)?",
-    r"dừng\s*(hội\s*thoại)?",
-    r"kết\s*thúc\s*(hội\s*thoại)?",
-    r"stop",
-    r"end\s*(conversation)?",
-    r"bye",
-    r"tạm\s*biệt",
-    r"cảm\s*ơn.*xong",
-    r"ok.*xong",
-    r"được\s*rồi",
 ]
 
 # Noise/meaningless input patterns
@@ -343,7 +332,7 @@ class WakeWordService:
                     if self.is_reset_command(text):
                         self.emit("reset_detected", text=text)
                         self.stop_current_tts() # Stop updated TTS
-                        self.speak("Ket thuc hoi thoai")
+                        self.speak("Kết thúc hội thoại")
                         break
                     
                     # Check for noise/meaningless input
@@ -360,9 +349,14 @@ class WakeWordService:
                     
                     # Get and speak LLM response
                     self.emit("debug", message="Getting LLM response...")
+                    music_tool_called = False
                     if self.llm_provider == "gemini":
                         # Gemini now handles TTS internally within the streaming function
-                        full_response = self.stream_gemini_response_with_context(text)
+                        result = self.stream_gemini_response_with_context(text)
+                        if isinstance(result, tuple):
+                            full_response, music_tool_called = result
+                        else:
+                            full_response = result
                         if full_response:
                             self.conversation.add_assistant_message(full_response)
                     else:
@@ -371,6 +365,7 @@ class WakeWordService:
                         self.tts_queue.put(response) # Use queue
                         if response:
                             self.conversation.add_assistant_message(response)
+                        full_response = response
                     
                     # Wait for TTS queue to empty (conversation turn complete)
                     self.tts_queue.join()
@@ -378,6 +373,11 @@ class WakeWordService:
                     # Emit that response is complete and ready for next turn
                     self.emit("response_complete")
                     self.emit("debug", message="Response complete, loop continuing...")
+                    
+                    # Auto-end conversation for music commands (if response doesn't end with ?)
+                    if music_tool_called and full_response and not full_response.strip().endswith("?"):
+                        self.emit("debug", message="Music command completed, ending conversation")
+                        break
                     
                     # Check if conversation is too long
                     if self.conversation.should_end_due_to_length():
@@ -464,6 +464,7 @@ QUY TẮC:
             full_text = ""
             sentence_buffer = ""
             function_calls = []
+            music_tool_called = False
             
             # Handle the stream
             for chunk in response_stream:
@@ -520,6 +521,7 @@ QUY TẮC:
                     # If it's a music tool, emit the action for frontend control
                     if result.get("action") and result["action"].startswith("MUSIC_"):
                         self.emit("music_action", action=result["action"], data=result.get("data", {}))
+                        music_tool_called = True
                     
                     function_responses.append({
                         "name": tool_name,
@@ -574,13 +576,13 @@ QUY TẮC:
                     self.tts_queue.put(clean_sent)
                     self.emit("llm_response", text=clean_sent)
             
-            return full_text
+            return full_text, music_tool_called
 
         except Exception as e:
             self.emit("error", message=f"Gemini Streaming Error: {e}")
             fallback = "Xin lỗi, có lỗi xảy ra."
             self.tts_queue.put(fallback)
-            return fallback    
+            return fallback, False    
     def get_llm_response_with_context(self, text):
         """Get response from LLM with conversation context (non-streaming)"""
         if self.llm_provider == "gemini":
