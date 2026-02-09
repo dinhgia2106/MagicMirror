@@ -144,8 +144,8 @@ class AgentTools:
                 "formatted_vi": f"Ngay {lunar['day']} {lunar_month_name} nam {get_year_can_chi(lunar['year'])}"
             }
             
-            # Check for lunar holidays
-            lunar_holiday = check_lunar_holiday(lunar['day'], lunar['month'])
+            # Check for lunar holidays (pass solar date for Giao Thua detection)
+            lunar_holiday = check_lunar_holiday(lunar['day'], lunar['month'], target_date.day, target_date.month, target_date.year)
             if lunar_holiday:
                 result["data"]["holidays"].append({
                     "name": lunar_holiday['name'],
@@ -335,7 +335,7 @@ class AgentTools:
         # Check lunar holidays first if available
         if LUNAR_AVAILABLE:
             lunar = solar_to_lunar(check_date.day, check_date.month, check_date.year)
-            lunar_holiday = check_lunar_holiday(lunar['day'], lunar['month'])
+            lunar_holiday = check_lunar_holiday(lunar['day'], lunar['month'], check_date.day, check_date.month, check_date.year)
             if lunar_holiday:
                 matching_holidays.append({
                     "name": lunar_holiday['name'],

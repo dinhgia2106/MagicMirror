@@ -192,49 +192,45 @@ Module.register("MMM-HolidayCalendar", {
 
         const currentYear = this.currentDate.getFullYear();
 
-        // Define lunar holidays from library
+        // Get lunar holidays from library (doesn't include Giao Thừa)
         const lunarHolidays = LunarCalendar.getHolidays();
 
         // Check surrounding lunar years
         [currentYear - 1, currentYear, currentYear + 1].forEach(lunarYear => {
+            // Add regular lunar holidays
             lunarHolidays.forEach(h => {
-                // Special handling for Giao thừa (day 30, month 12)
-                // Not all lunar years have 30 days in month 12 (tháng Chạp)
-                // We need to find the last day of lunar December
-                if (h.day === 30 && h.month === 12) {
-                    // Check if day 30 exists in lunar December
-                    const day30Solar = LunarCalendar.getSolarDate(30, 12, lunarYear, false);
-                    if (day30Solar && day30Solar.day > 0) {
-                        // Verify this is actually day 30 of month 12 (not month 1 of next year)
-                        const verify = LunarCalendar.getLunarDate(day30Solar.day, day30Solar.month, day30Solar.year);
-                        if (verify.month === 12 && verify.day === 30) {
-                            const dateKey = this.getDateKey(day30Solar.year, day30Solar.month - 1, day30Solar.day);
-                            this.addHoliday(dateKey, h.name);
-                        } else {
-                            // Month 12 only has 29 days, use day 29 for Giao thừa
-                            const day29Solar = LunarCalendar.getSolarDate(29, 12, lunarYear, false);
-                            if (day29Solar && day29Solar.day > 0) {
-                                const dateKey = this.getDateKey(day29Solar.year, day29Solar.month - 1, day29Solar.day);
-                                this.addHoliday(dateKey, h.name);
-                            }
-                        }
-                    } else {
-                        // Day 30 doesn't exist, use day 29
-                        const day29Solar = LunarCalendar.getSolarDate(29, 12, lunarYear, false);
-                        if (day29Solar && day29Solar.day > 0) {
-                            const dateKey = this.getDateKey(day29Solar.year, day29Solar.month - 1, day29Solar.day);
-                            this.addHoliday(dateKey, h.name);
-                        }
-                    }
-                } else {
-                    // Normal lunar holidays
-                    const solar = LunarCalendar.getSolarDate(h.day, h.month, lunarYear, false);
-                    if (solar && solar.day > 0) {
-                        const dateKey = this.getDateKey(solar.year, solar.month - 1, solar.day);
-                        this.addHoliday(dateKey, h.name);
-                    }
+                const solar = LunarCalendar.getSolarDate(h.day, h.month, lunarYear, false);
+                if (solar && solar.day > 0) {
+                    const dateKey = this.getDateKey(solar.year, solar.month - 1, solar.day);
+                    this.addHoliday(dateKey, h.name);
                 }
             });
+
+            // Add Giao Thừa dynamically (last day of lunar month 12, can be 29 or 30)
+            // Check if day 30 exists, otherwise use day 29
+            const day30Solar = LunarCalendar.getSolarDate(30, 12, lunarYear, false);
+            if (day30Solar && day30Solar.day > 0) {
+                // Verify this is actually day 30 of month 12 (not invalid)
+                const verify = LunarCalendar.getLunarDate(day30Solar.day, day30Solar.month, day30Solar.year);
+                if (verify.month === 12 && verify.day === 30) {
+                    const dateKey = this.getDateKey(day30Solar.year, day30Solar.month - 1, day30Solar.day);
+                    this.addHoliday(dateKey, "Giao thừa");
+                } else {
+                    // Month 12 only has 29 days, use day 29 for Giao thừa
+                    const day29Solar = LunarCalendar.getSolarDate(29, 12, lunarYear, false);
+                    if (day29Solar && day29Solar.day > 0) {
+                        const dateKey = this.getDateKey(day29Solar.year, day29Solar.month - 1, day29Solar.day);
+                        this.addHoliday(dateKey, "Giao thừa");
+                    }
+                }
+            } else {
+                // Day 30 doesn't exist, use day 29
+                const day29Solar = LunarCalendar.getSolarDate(29, 12, lunarYear, false);
+                if (day29Solar && day29Solar.day > 0) {
+                    const dateKey = this.getDateKey(day29Solar.year, day29Solar.month - 1, day29Solar.day);
+                    this.addHoliday(dateKey, "Giao thừa");
+                }
+            }
         });
     },
 
@@ -936,9 +932,26 @@ Module.register("MMM-HolidayCalendar", {
 
     addCustomHoliday: function (holiday) {
         const currentYear = this.currentDate.getFullYear();
-        const years = [currentYear - 1, currentYear, currentYear + 1];
         const isVi = this.config.language === "vi";
         const name = (isVi && holiday.nameVi) ? holiday.nameVi : holiday.name;
+
+        // If API provides precomputed date, use it directly (handles Giao Thua correctly)
+        if (holiday.date) {
+            const dateParts = holiday.date.split('-');
+            const year = parseInt(dateParts[0]);
+            const month = parseInt(dateParts[1]) - 1; // JS months are 0-indexed
+            const day = parseInt(dateParts[2]);
+
+            // Only add if in range of current year +/- 1
+            if (year >= currentYear - 1 && year <= currentYear + 1) {
+                const dateKey = this.getDateKey(year, month, day);
+                this.addHoliday(dateKey, name);
+            }
+            return;
+        }
+
+        // Fallback: compute dates locally for holidays without precomputed date
+        const years = [currentYear - 1, currentYear, currentYear + 1];
 
         years.forEach(year => {
             let dateKey = null;
@@ -946,9 +959,32 @@ Module.register("MMM-HolidayCalendar", {
             if (holiday.type === "solar") {
                 dateKey = this.getDateKey(year, holiday.month - 1, holiday.day);
             } else if (holiday.type === "lunar" && typeof LunarCalendar !== 'undefined') {
-                const solar = LunarCalendar.getSolarDate(holiday.lunarDay, holiday.lunarMonth, year, false);
-                if (solar && solar.day > 0) {
-                    dateKey = this.getDateKey(solar.year, solar.month - 1, solar.day);
+                // Special handling for Giao Thua (month 12, day 30)
+                if (holiday.lunarMonth === 12 && holiday.lunarDay === 30) {
+                    // Check if day 30 exists, otherwise use day 29
+                    const solar30 = LunarCalendar.getSolarDate(30, 12, year, false);
+                    if (solar30 && solar30.day > 0) {
+                        const verify = LunarCalendar.getLunarDate(solar30.day, solar30.month, solar30.year);
+                        if (verify.month === 12 && verify.day === 30) {
+                            dateKey = this.getDateKey(solar30.year, solar30.month - 1, solar30.day);
+                        } else {
+                            // Month 12 has only 29 days
+                            const solar29 = LunarCalendar.getSolarDate(29, 12, year, false);
+                            if (solar29 && solar29.day > 0) {
+                                dateKey = this.getDateKey(solar29.year, solar29.month - 1, solar29.day);
+                            }
+                        }
+                    } else {
+                        const solar29 = LunarCalendar.getSolarDate(29, 12, year, false);
+                        if (solar29 && solar29.day > 0) {
+                            dateKey = this.getDateKey(solar29.year, solar29.month - 1, solar29.day);
+                        }
+                    }
+                } else {
+                    const solar = LunarCalendar.getSolarDate(holiday.lunarDay, holiday.lunarMonth, year, false);
+                    if (solar && solar.day > 0) {
+                        dateKey = this.getDateKey(solar.year, solar.month - 1, solar.day);
+                    }
                 }
             } else if (holiday.type === "specific" && holiday.year === year) {
                 dateKey = this.getDateKey(year, holiday.month - 1, holiday.day);

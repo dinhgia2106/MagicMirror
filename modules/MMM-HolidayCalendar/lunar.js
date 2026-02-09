@@ -286,8 +286,9 @@ var LunarCalendar = (function () {
         return can + ' ' + chi;
     }
 
+    // Lunar holidays - NOTE: Giao Thua is NOT in this list because 
+    // lunar month 12 can have 29 or 30 days. Use isGiaoThua() instead.
     var lunarHolidays = [
-        { day: 30, month: 12, name: "Giao thừa" },
         { day: 1, month: 1, name: "Mùng 1 Tết" },
         { day: 2, month: 1, name: "Mùng 2 Tết" },
         { day: 3, month: 1, name: "Mùng 3 Tết" },

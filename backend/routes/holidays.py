@@ -15,12 +15,15 @@ def get_holidays():
     """Get all holidays or search by query."""
     service = get_holiday_service()
     
+    # Get year parameter (defaults to current year)
+    year = request.args.get('year', type=int)
+    
     # Check for search query
     query = request.args.get('q', '').strip()
     if query:
         holidays = service.search(query)
     else:
-        holidays = service.get_all()
+        holidays = service.get_all(year=year)
     
     return jsonify({
         'success': True,
