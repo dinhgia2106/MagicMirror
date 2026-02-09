@@ -216,7 +216,7 @@ module.exports = NodeHelper.create({
             case "music_action": {
                 const action = event.action;
                 const data = event.data || {};
-                console.log(`[MMM-LLMsAssistant] Music action: ${action}`);
+                console.log(`[MMM-LLMsAssistant] Music action: ${action}, data: ${JSON.stringify(data)}`);
                 this.sendSocketNotification(action, data);
                 break;
             }

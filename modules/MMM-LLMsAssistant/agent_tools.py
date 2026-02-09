@@ -498,6 +498,26 @@ class AgentTools:
             "message": f"Đã đặt âm lượng {level}%"
         }
     
+    def music_search_play(self, song_name: str) -> Dict[str, Any]:
+        """
+        Search for a song by name and play it.
+        After the song finishes, playback will return to the previous position.
+        Args:
+            song_name: Name or part of the song name to search for
+        """
+        if not song_name or not song_name.strip():
+            return {
+                "success": False,
+                "error": "Vui lòng cung cấp tên bài hát"
+            }
+        
+        return {
+            "success": True,
+            "action": "MUSIC_SEARCH_PLAY",
+            "data": {"song_name": song_name.strip()},
+            "message": f"Đang tìm và phát bài hát: {song_name}"
+        }
+    
     # ==================== UTILITY METHODS ====================
     
     def execute_tool(self, tool_name: str, arguments: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -524,6 +544,7 @@ class AgentTools:
             "music_next": self.music_next,
             "music_prev": self.music_prev,
             "music_volume": self.music_volume,
+            "music_search_play": self.music_search_play,
         }
         
         if tool_name not in tool_map:
@@ -698,6 +719,20 @@ TOOL_DECLARATIONS = [
                 }
             },
             "required": ["level"]
+        }
+    },
+    {
+        "name": "music_search_play",
+        "description": "Tìm kiếm và phát một bài hát theo tên. Sau khi bài hát kết thúc sẽ quay lại bài đang phát trước đó. Use when user says 'phát bài', 'bật bài', 'mở bài', 'tìm bài', 'nghe bài', 'play song', 'search song', followed by a song name. Example: 'phát bài Em của ngày hôm qua', 'bật bài Chạy ngay đi'.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "song_name": {
+                    "type": "string",
+                    "description": "Name or part of the song name to search for"
+                }
+            },
+            "required": ["song_name"]
         }
     }
 ]
