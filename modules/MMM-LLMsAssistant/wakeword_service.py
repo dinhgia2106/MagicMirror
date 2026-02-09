@@ -872,6 +872,7 @@ QUY TAC PHAN HOI:
                     tool_args = dict(fc.args) if fc.args else {}
                     self.emit("debug", message=f"Calling {tool_name} with {tool_args}...")
                     result = self.agent_tools.execute_tool(tool_name, tool_args)
+                    self.emit("debug", message=f"Tool result: {str(result)[:200]}...")
                     
                     # If it's a music tool, emit the action for frontend control
                     if result.get("action") and result["action"].startswith("MUSIC_"):
@@ -888,10 +889,48 @@ QUY TAC PHAN HOI:
                 # Reset and get final response
                 full_text = ""
                 
-                # Send tool results back to Gemini - collect all
-                for chunk in chat.send_message_stream(function_responses):
-                    if chunk.text:
-                        full_text += chunk.text
+                # Send tool results back to Gemini - may need multiple rounds
+                max_rounds = 3
+                for round_num in range(max_rounds):
+                    self.emit("debug", message=f"Sending function responses to Gemini (round {round_num + 1})...")
+                    
+                    new_function_calls = []
+                    for chunk in chat.send_message_stream(function_responses):
+                        # Check for more function calls
+                        if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                            for part in chunk.candidates[0].content.parts:
+                                if part.function_call:
+                                    new_function_calls.append(part.function_call)
+                        
+                        if chunk.text:
+                            full_text += chunk.text
+                    
+                    # If no more function calls, we're done
+                    if not new_function_calls:
+                        break
+                    
+                    # Execute new function calls
+                    self.emit("debug", message=f"Gemini wants {len(new_function_calls)} more function call(s)...")
+                    function_responses = []
+                    for fc in new_function_calls:
+                        tool_name = fc.name
+                        tool_args = dict(fc.args) if fc.args else {}
+                        self.emit("debug", message=f"Calling {tool_name} with {tool_args}...")
+                        result = self.agent_tools.execute_tool(tool_name, tool_args)
+                        self.emit("debug", message=f"Tool result: {str(result)[:200]}...")
+                        
+                        if result.get("action") and result["action"].startswith("MUSIC_"):
+                            self.emit("music_action", action=result["action"], data=result.get("data", {}))
+                            music_tool_called = True
+                        
+                        function_responses.append(
+                            types.Part.from_function_response(
+                                name=tool_name,
+                                response={"result": json.dumps(result, ensure_ascii=False)}
+                            )
+                        )
+                
+                self.emit("debug", message=f"Final text after tools: '{full_text[:100] if full_text else 'EMPTY'}'")
             
             # Clean and send to TTS once
             if full_text:
@@ -899,6 +938,8 @@ QUY TAC PHAN HOI:
                 if clean_text:
                     self.emit("llm_response", text=clean_text)
                     self.tts_queue.put(clean_text)
+            else:
+                self.emit("debug", message="WARNING: No text response from Gemini after function calls")
             
             return full_text, music_tool_called
 

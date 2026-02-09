@@ -363,6 +363,136 @@ class AgentTools:
             }
         }
     
+    def find_holiday(self, holiday_name: str, year: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Find a holiday by name and return its solar date.
+        Use this when user asks about a specific holiday like 'Giao thua', 'Tet', 'Trung Thu'.
+        
+        Args:
+            holiday_name: Name of the holiday to find (e.g., 'Giao thua', 'Tet', 'Mung 1')
+            year: Year to search in (defaults to current year)
+        """
+        if year is None:
+            year = datetime.datetime.now(self.timezone).year
+        
+        # Normalize search term
+        search_lower = holiday_name.lower().strip()
+        
+        # Common Vietnamese holiday name mappings
+        name_mappings = {
+            'tet': ['tet day 1', 'mung 1', 'tet nguyen dan'],
+            'giao thua': ['giao thua', 'giao thừa', 'dem giao thua'],
+            'trung thu': ['mid-autumn', 'trung thu'],
+            'vu lan': ['vu lan', 'le vu lan'],
+            'ong cong': ['kitchen gods', 'ong cong ong tao', 'táo quân'],
+            'hung vuong': ['hung kings', 'gio to hung vuong'],
+            'doan ngo': ['doan ngo', 'tet doan ngo'],
+        }
+        
+        # Expand search terms
+        search_terms = [search_lower]
+        for key, aliases in name_mappings.items():
+            if any(alias in search_lower or search_lower in alias for alias in aliases + [key]):
+                search_terms.extend(aliases)
+                search_terms.append(key)
+        
+        # Get holidays from API
+        try:
+            response = requests.get(f"{self.holiday_api_url}?year={year}", timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            holidays = data.get("data", [])
+        except requests.RequestException:
+            holidays = []
+        
+        # Also check built-in lunar holidays
+        if LUNAR_AVAILABLE:
+            lunar_holiday_map = {
+                'giao thua': {'lunar_day': 29, 'lunar_month': 12, 'name': 'Giao Thua', 'nameVi': 'Giao thừa'},
+                'mung 1': {'lunar_day': 1, 'lunar_month': 1, 'name': 'Tet Day 1', 'nameVi': 'Mùng 1 Tết'},
+                'tet': {'lunar_day': 1, 'lunar_month': 1, 'name': 'Tet Day 1', 'nameVi': 'Mùng 1 Tết'},
+                'trung thu': {'lunar_day': 15, 'lunar_month': 8, 'name': 'Mid-Autumn Festival', 'nameVi': 'Tết Trung Thu'},
+                'vu lan': {'lunar_day': 15, 'lunar_month': 7, 'name': 'Vu Lan Festival', 'nameVi': 'Lễ Vu Lan'},
+                'ong cong': {'lunar_day': 23, 'lunar_month': 12, 'name': 'Kitchen Gods Day', 'nameVi': 'Ông Công Ông Táo'},
+            }
+            
+            for term in search_terms:
+                if term in lunar_holiday_map:
+                    h = lunar_holiday_map[term]
+                    # Special handling for Giao Thua
+                    if term == 'giao thua':
+                        # Check which lunar year we need (year-1 for Tet in Jan/Feb)
+                        for lunar_year in [year - 1, year]:
+                            solar_30 = lunar_to_solar(30, 12, lunar_year, False)
+                            if solar_30 and solar_30['day'] > 0:
+                                verify = solar_to_lunar(solar_30['day'], solar_30['month'], solar_30['year'])
+                                if verify['month'] == 12 and verify['day'] == 30:
+                                    if solar_30['year'] == year:
+                                        return {
+                                            "success": True,
+                                            "data": {
+                                                "name": h['name'],
+                                                "nameVi": h['nameVi'],
+                                                "date": f"{solar_30['year']:04d}-{solar_30['month']:02d}-{solar_30['day']:02d}",
+                                                "lunar_date": f"30/12 âm lịch năm {lunar_year}",
+                                                "day_of_week": datetime.date(solar_30['year'], solar_30['month'], solar_30['day']).strftime('%A'),
+                                                "type": "lunar"
+                                            }
+                                        }
+                            # Try day 29
+                            solar_29 = lunar_to_solar(29, 12, lunar_year, False)
+                            if solar_29 and solar_29['day'] > 0 and solar_29['year'] == year:
+                                return {
+                                    "success": True,
+                                    "data": {
+                                        "name": h['name'],
+                                        "nameVi": h['nameVi'],
+                                        "date": f"{solar_29['year']:04d}-{solar_29['month']:02d}-{solar_29['day']:02d}",
+                                        "lunar_date": f"29/12 âm lịch năm {lunar_year}",
+                                        "day_of_week": datetime.date(solar_29['year'], solar_29['month'], solar_29['day']).strftime('%A'),
+                                        "type": "lunar"
+                                    }
+                                }
+                    else:
+                        # Normal lunar holiday
+                        for lunar_year in [year - 1, year]:
+                            solar = lunar_to_solar(h['lunar_day'], h['lunar_month'], lunar_year, False)
+                            if solar and solar['day'] > 0 and solar['year'] == year:
+                                return {
+                                    "success": True,
+                                    "data": {
+                                        "name": h['name'],
+                                        "nameVi": h['nameVi'],
+                                        "date": f"{solar['year']:04d}-{solar['month']:02d}-{solar['day']:02d}",
+                                        "lunar_date": f"{h['lunar_day']}/{h['lunar_month']} âm lịch",
+                                        "day_of_week": datetime.date(solar['year'], solar['month'], solar['day']).strftime('%A'),
+                                        "type": "lunar"
+                                    }
+                                }
+        
+        # Search in API results
+        for h in holidays:
+            name = h.get('name', '').lower()
+            name_vi = h.get('nameVi', '').lower()
+            if any(term in name or term in name_vi or name in term or name_vi in term for term in search_terms):
+                if h.get('date'):
+                    date_obj = datetime.datetime.strptime(h['date'], '%Y-%m-%d')
+                    return {
+                        "success": True,
+                        "data": {
+                            "name": h.get('name'),
+                            "nameVi": h.get('nameVi'),
+                            "date": h['date'],
+                            "day_of_week": date_obj.strftime('%A'),
+                            "type": h.get('type', 'unknown')
+                        }
+                    }
+        
+        return {
+            "success": False,
+            "error": f"Holiday '{holiday_name}' not found for year {year}"
+        }
+    
     # ==================== WEATHER TOOLS ====================
     
     def get_current_weather(self) -> Dict[str, Any]:
@@ -649,6 +779,7 @@ class AgentTools:
             "get_holidays": self.get_holidays,
             "get_upcoming_holidays": self.get_upcoming_holidays,
             "check_holiday": self.check_holiday,
+            "find_holiday": self.find_holiday,
             "get_current_weather": self.get_current_weather,
             "get_weather_forecast": self.get_weather_forecast,
             # Music control tools
@@ -759,6 +890,24 @@ TOOL_DECLARATIONS = [
                 }
             },
             "required": ["date_str"]
+        }
+    },
+    {
+        "name": "find_holiday",
+        "description": "Find a specific holiday by name and get its solar/Gregorian date. Use this when user asks 'when is Giao thua?', 'Tet is what date?', 'ngay giao thua la ngay may duong', 'Trung Thu nam nay', etc. Returns the exact solar date for holidays like Giao Thua, Tet, Trung Thu, Vu Lan, Ong Cong Ong Tao.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "holiday_name": {
+                    "type": "string",
+                    "description": "Name of the holiday to find (e.g., 'Giao thua', 'Tet', 'Trung Thu', 'Vu Lan', 'Ong Cong')"
+                },
+                "year": {
+                    "type": "integer",
+                    "description": "Year to search in (optional, defaults to current year)"
+                }
+            },
+            "required": ["holiday_name"]
         }
     },
     {
