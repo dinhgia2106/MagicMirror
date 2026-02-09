@@ -589,6 +589,11 @@ Module.register("MMM-SoundCloud", {
 
     next: function () {
         if (this.widget && this.widgetReady) {
+            // If playing a searched song from outside playlist, return to original
+            if (this.isPlayingSearched) {
+                this.returnToSavedTrack();
+                return;
+            }
             if (this.isShuffled) {
                 this.playRandomTrack();
             } else {
@@ -599,6 +604,11 @@ Module.register("MMM-SoundCloud", {
 
     prev: function () {
         if (this.widget && this.widgetReady) {
+            // If playing a searched song from outside playlist, return to original
+            if (this.isPlayingSearched) {
+                this.returnToSavedTrack();
+                return;
+            }
             this.widget.prev();
         }
     },
