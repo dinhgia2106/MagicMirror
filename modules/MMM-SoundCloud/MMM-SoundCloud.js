@@ -39,6 +39,10 @@ Module.register("MMM-SoundCloud", {
         this.savedIsPaused = true;         // Whether music was paused before search
         this.savedPlaylistUrl = this.config.playlistUrl;  // Original playlist URL to return to
         this.pendingSearchState = null;  // Pending search state while waiting for API response
+
+        // Volume control during AI conversation
+        this.isConversationActive = false;  // Flag when AI conversation is active
+        this.pendingVolume = null;           // Volume to apply when conversation ends
     },
 
     getDom: function () {
@@ -227,10 +231,20 @@ Module.register("MMM-SoundCloud", {
                 break;
             case "MUSIC_SET_VOLUME":
                 if (payload && typeof payload.volume === "number") {
-                    this.setVolume(payload.volume);
+                    if (this.isConversationActive) {
+                        // During AI conversation: store pending volume, don't apply immediately
+                        // Volume will be applied when conversation ends
+                        this.pendingVolume = payload.volume;
+                        Log.info("MMM-SoundCloud: Volume " + payload.volume + "% queued (will apply after conversation)");
+                    } else {
+                        // No conversation: apply volume immediately
+                        this.setVolume(payload.volume);
+                    }
                 }
                 break;
             case "MUSIC_LOWER_VOLUME":
+                this.isConversationActive = true;
+                this.pendingVolume = null;  // Reset pending volume for new conversation
                 this.lowerVolume();
                 break;
             case "MUSIC_RESTORE_VOLUME":
@@ -634,9 +648,18 @@ Module.register("MMM-SoundCloud", {
     },
 
     restoreVolume: function () {
-        // Restore previous volume
-        this.setVolume(this.previousVolume);
-        Log.info("MMM-SoundCloud: Volume restored to " + this.previousVolume + "%");
+        this.isConversationActive = false;
+
+        // Apply pending volume if user requested a change during conversation
+        if (this.pendingVolume !== null) {
+            this.setVolume(this.pendingVolume);
+            Log.info("MMM-SoundCloud: Volume set to requested " + this.pendingVolume + "%");
+            this.pendingVolume = null;
+        } else {
+            // No pending change: restore to previous volume
+            this.setVolume(this.previousVolume);
+            Log.info("MMM-SoundCloud: Volume restored to " + this.previousVolume + "%");
+        }
     },
 
     // Search for a track by name and play it
