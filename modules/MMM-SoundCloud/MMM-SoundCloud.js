@@ -43,6 +43,10 @@ Module.register("MMM-SoundCloud", {
         // Volume control during AI conversation
         this.isConversationActive = false;  // Flag when AI conversation is active
         this.pendingVolume = null;           // Volume to apply when conversation ends
+
+        // Audio visualizer
+        this.visualizerBars = [];
+        this.visualizerInterval = null;
     },
 
     getDom: function () {
@@ -65,24 +69,54 @@ Module.register("MMM-SoundCloud", {
         const playerUI = document.createElement("div");
         playerUI.className = "player-ui";
 
-        // Track info row
+        // Track info row with scrollable text
         const trackRow = document.createElement("div");
-        trackRow.className = "track-row";
+        trackRow.className = "track-row scrollable-text";
+        trackRow.id = "track-row";
 
-        const trackName = document.createElement("div");
-        trackName.className = "track-name";
+        const trackName = document.createElement("span");
+        trackName.className = "track-name scroll-content";
         trackName.id = "track-name";
         trackName.textContent = this.currentTrack ? this.currentTrack.title : "Loading...";
         trackRow.appendChild(trackName);
 
+        this.setupScrollableText(trackRow);
         playerUI.appendChild(trackRow);
 
-        // Artist row
-        const artistName = document.createElement("div");
-        artistName.className = "artist-name";
+        // Artist row with scrollable text
+        const artistRow = document.createElement("div");
+        artistRow.className = "artist-name scrollable-text";
+        artistRow.id = "artist-row";
+
+        const artistName = document.createElement("span");
+        artistName.className = "scroll-content";
         artistName.id = "artist-name";
         artistName.textContent = this.currentTrack ? this.currentTrack.user.username : "";
-        playerUI.appendChild(artistName);
+        artistRow.appendChild(artistName);
+
+        this.setupScrollableText(artistRow);
+        playerUI.appendChild(artistRow);
+
+        // Audio Visualizer
+        const visualizer = document.createElement("div");
+        visualizer.className = "audio-visualizer";
+        visualizer.id = "audio-visualizer";
+
+        // Create 30 bars
+        const barCount = 45;
+        this.visualizerBars = [];
+        for (let i = 0; i < barCount; i++) {
+            const bar = document.createElement("div");
+            bar.className = "visualizer-bar";
+            bar.style.height = "4px";
+            visualizer.appendChild(bar);
+            this.visualizerBars.push(bar);
+        }
+        playerUI.appendChild(visualizer);
+
+        // Bottom section - contains progress, time and controls
+        const bottomSection = document.createElement("div");
+        bottomSection.className = "bottom-section";
 
         // Progress bar
         const progressContainer = document.createElement("div");
@@ -97,7 +131,7 @@ Module.register("MMM-SoundCloud", {
         progressContainer.appendChild(progressBar);
 
         this.setupSeekGesture(progressContainer);
-        playerUI.appendChild(progressContainer);
+        bottomSection.appendChild(progressContainer);
 
         // Time display
         const timeRow = document.createElement("div");
@@ -113,7 +147,7 @@ Module.register("MMM-SoundCloud", {
         totalTime.textContent = this.formatTime(this.duration);
         timeRow.appendChild(totalTime);
 
-        playerUI.appendChild(timeRow);
+        bottomSection.appendChild(timeRow);
 
         // Controls row
         const controlsRow = document.createElement("div");
@@ -190,11 +224,77 @@ Module.register("MMM-SoundCloud", {
         shuffleBtn.onclick = () => this.toggleShuffle();
         controlsRow.appendChild(shuffleBtn);
 
-        playerUI.appendChild(controlsRow);
+        bottomSection.appendChild(controlsRow);
+        playerUI.appendChild(bottomSection);
 
         wrapper.appendChild(playerUI);
 
         return wrapper;
+    },
+
+    // Setup scrollable text with marquee
+    setupScrollableText: function (container) {
+        const checkOverflow = () => {
+            const content = container.querySelector('.scroll-content');
+            if (!content) return;
+
+            // Reset first
+            container.classList.remove('scrolling');
+
+            const isOverflowing = content.scrollWidth > container.clientWidth;
+
+            if (isOverflowing && !content.dataset.duplicated) {
+                // Duplicate content for seamless loop
+                const originalText = content.textContent;
+                content.textContent = originalText + '          ' + originalText;
+                content.dataset.duplicated = 'true';
+                container.classList.add('scrolling');
+            } else if (isOverflowing) {
+                container.classList.add('scrolling');
+            }
+        };
+
+        // Check on next frame to ensure layout is complete
+        setTimeout(checkOverflow, 200);
+    },
+
+
+    // Start audio visualizer animation
+    startVisualizer: function () {
+        if (this.visualizerInterval) return;
+
+        this.visualizerInterval = setInterval(() => {
+            if (this.isPaused) {
+                // When paused, bars go low
+                this.visualizerBars.forEach(bar => {
+                    bar.style.height = '4px';
+                });
+                return;
+            }
+
+            // Simulate audio intensity with random heights
+            this.visualizerBars.forEach((bar, index) => {
+                // Create wave pattern from center
+                const centerIndex = this.visualizerBars.length / 2;
+                const distFromCenter = Math.abs(index - centerIndex) / centerIndex;
+                const baseHeight = (1 - distFromCenter * 0.5) * 80;
+                const randomFactor = Math.random() * 40;
+                const height = Math.max(4, baseHeight + randomFactor - 20);
+                bar.style.height = height + 'px';
+            });
+        }, 100);
+    },
+
+    // Stop audio visualizer animation
+    stopVisualizer: function () {
+        if (this.visualizerInterval) {
+            clearInterval(this.visualizerInterval);
+            this.visualizerInterval = null;
+        }
+        // Reset bars to minimum height
+        this.visualizerBars.forEach(bar => {
+            bar.style.height = '4px';
+        });
     },
 
     formatTime: function (ms) {
@@ -344,11 +444,13 @@ Module.register("MMM-SoundCloud", {
         this.widget.bind(SC.Widget.Events.PLAY, () => {
             this.isPaused = false;
             this.updatePlayStatus();
+            this.startVisualizer();
         });
 
         this.widget.bind(SC.Widget.Events.PAUSE, () => {
             this.isPaused = true;
             this.updatePlayStatus();
+            this.stopVisualizer();
         });
 
         this.widget.bind(SC.Widget.Events.PLAY_PROGRESS, (data) => {
@@ -386,9 +488,49 @@ Module.register("MMM-SoundCloud", {
                 const trackNameEl = document.getElementById("track-name");
                 const artistNameEl = document.getElementById("artist-name");
                 const totalTimeEl = document.getElementById("total-time");
+                const trackRow = document.getElementById("track-row");
+                const artistRow = document.getElementById("artist-row");
 
-                if (trackNameEl) trackNameEl.textContent = sound.title || "Unknown";
-                if (artistNameEl) artistNameEl.textContent = sound.user ? sound.user.username : "";
+                if (trackNameEl) {
+                    // Reset scroll state for new track
+                    trackNameEl.dataset.duplicated = '';
+                    trackNameEl.textContent = sound.title || "Unknown";
+                    if (trackRow) {
+                        trackRow.classList.remove('scrolling');
+                        // Recheck overflow
+                        setTimeout(() => {
+                            const isOverflowing = trackNameEl.scrollWidth > trackRow.clientWidth;
+                            if (isOverflowing) {
+                                if (!trackNameEl.dataset.duplicated) {
+                                    const originalText = trackNameEl.textContent;
+                                    trackNameEl.textContent = originalText + '          ' + originalText;
+                                    trackNameEl.dataset.duplicated = 'true';
+                                }
+                                trackRow.classList.add('scrolling');
+                            }
+                        }, 200);
+                    }
+                }
+                if (artistNameEl) {
+                    // Reset scroll state for new artist
+                    artistNameEl.dataset.duplicated = '';
+                    artistNameEl.textContent = sound.user ? sound.user.username : "";
+                    if (artistRow) {
+                        artistRow.classList.remove('scrolling');
+                        // Recheck overflow
+                        setTimeout(() => {
+                            const isOverflowing = artistNameEl.scrollWidth > artistRow.clientWidth;
+                            if (isOverflowing) {
+                                if (!artistNameEl.dataset.duplicated) {
+                                    const originalText = artistNameEl.textContent;
+                                    artistNameEl.textContent = originalText + '          ' + originalText;
+                                    artistNameEl.dataset.duplicated = 'true';
+                                }
+                                artistRow.classList.add('scrolling');
+                            }
+                        }, 200);
+                    }
+                }
                 if (totalTimeEl) totalTimeEl.textContent = this.formatTime(this.duration);
 
                 // Broadcast track change

@@ -3,6 +3,9 @@
     width: 350px;
     padding: 12px 0;
     margin-top: 8px;
+    display: flex;
+    flex-direction: column;
+    min-height: 280px;
 }
 
 /* Hide the SoundCloud iframe */
@@ -10,9 +13,40 @@
     display: none;
 }
 
-/* Player UI Container - No background */
+/* Player UI Container - Flex column */
 .player-ui {
     padding: 0;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+/* Scrollable text container */
+.scrollable-text {
+    overflow: hidden;
+    white-space: nowrap;
+    position: relative;
+    width: 100%;
+}
+
+.scrollable-text .scroll-content {
+    display: inline-block;
+    white-space: nowrap;
+    padding-right: 40px;
+}
+
+.scrollable-text.scrolling .scroll-content {
+    animation: marquee-scroll 10s linear infinite;
+}
+
+@keyframes marquee-scroll {
+    0% {
+        transform: translateX(0);
+    }
+
+    100% {
+        transform: translateX(-50%);
+    }
 }
 
 /* Track name */
@@ -20,9 +54,6 @@
     font-size: 18px;
     font-weight: 400;
     color: rgba(255, 255, 255, 0.9);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     margin-bottom: 4px;
 }
 
@@ -70,7 +101,34 @@
     justify-content: space-between;
     font-size: 12px;
     color: rgba(255, 255, 255, 0.3);
-    margin-bottom: 12px;
+    margin-bottom: 8px;
+}
+
+/* Audio Visualizer */
+.audio-visualizer {
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    gap: 3px;
+    width: 90%;
+    height: 100px;
+    margin: 0 auto 12px auto;
+    pointer-events: none;
+}
+
+.visualizer-bar {
+    width: 4px;
+    min-height: 4px;
+    background: linear-gradient(to top, rgba(255, 85, 0, 0.8), rgba(255, 170, 100, 0.6));
+    border-radius: 2px;
+    transition: height 0.05s ease-out;
+}
+
+/* Bottom section - push to bottom */
+.bottom-section {
+    margin-top: auto;
+    position: relative;
+    z-index: 10;
 }
 
 /* Controls row */
