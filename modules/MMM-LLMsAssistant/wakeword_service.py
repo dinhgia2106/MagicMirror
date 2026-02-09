@@ -844,22 +844,31 @@ QUY TAC PHAN HOI:
             full_text = ""
             function_calls = []
             music_tool_called = False
+            chunk_count = 0
             
-            # Stream the response - collect all text first
+            # Stream the response - collect all text and function calls
             for chunk in chat.send_message_stream(text):
+                chunk_count += 1
+                
+                # Debug: Log what's in the chunk
+                has_candidates = bool(chunk.candidates)
+                has_text = bool(chunk.text) if hasattr(chunk, 'text') else False
+                
                 # Check for function calls
                 if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
                     for part in chunk.candidates[0].content.parts:
                         if part.function_call:
                             function_calls.append(part.function_call)
+                            self.emit("debug", message=f"Found function call: {part.function_call.name}")
+                        # Also collect text that may appear alongside function calls
+                        if hasattr(part, 'text') and part.text:
+                            full_text += part.text
                 
-                # If we found function calls, drain the rest of the stream and continue
-                if function_calls:
-                    continue
-                
-                # Collect text content
+                # Also try chunk.text for text-only chunks
                 if chunk.text:
                     full_text += chunk.text
+            
+            self.emit("debug", message=f"Stream finished: {chunk_count} chunks, {len(function_calls)} function calls, text len={len(full_text)}")
             
             # If there were function calls, execute them and get the final answer
             if function_calls:
@@ -938,8 +947,24 @@ QUY TAC PHAN HOI:
                 if clean_text:
                     self.emit("llm_response", text=clean_text)
                     self.tts_queue.put(clean_text)
+            elif function_calls:
+                # Fallback: If no text after function calls, try non-streaming request
+                self.emit("debug", message="No text from streaming, trying non-streaming fallback...")
+                try:
+                    # Send a simple follow-up to get text response
+                    fallback_response = chat.send_message("Vui long tra loi bang van ban dua tren ket qua cong cu.")
+                    if fallback_response.text:
+                        full_text = fallback_response.text
+                        clean_text = self.clean_text_for_tts(full_text)
+                        if clean_text:
+                            self.emit("llm_response", text=clean_text)
+                            self.tts_queue.put(clean_text)
+                    else:
+                        self.emit("debug", message="WARNING: Fallback also returned no text")
+                except Exception as fb_error:
+                    self.emit("debug", message=f"Fallback error: {fb_error}")
             else:
-                self.emit("debug", message="WARNING: No text response from Gemini after function calls")
+                self.emit("debug", message="WARNING: No text response from Gemini")
             
             return full_text, music_tool_called
 
