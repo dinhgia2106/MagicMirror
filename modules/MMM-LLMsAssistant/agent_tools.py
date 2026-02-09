@@ -498,6 +498,27 @@ class AgentTools:
             "message": f"Đã đặt âm lượng {level}%"
         }
     
+    def music_adjust_volume(self, adjustment_type: str, amount: float = 10) -> Dict[str, Any]:
+        """
+        Adjust music volume relatively (increase/decrease by amount or multiply).
+        Args:
+            adjustment_type: Type of adjustment:
+                - 'increase': Increase volume by amount%
+                - 'decrease': Decrease volume by amount%
+                - 'multiply': Multiply volume by amount (e.g., 2 for double, 0.5 for half)
+                - 'increase_little': Increase by 5% (ignores amount)
+                - 'decrease_little': Decrease by 5% (ignores amount)
+                - 'increase_lot': Increase by 20% (ignores amount)
+                - 'decrease_lot': Decrease by 20% (ignores amount)
+            amount: Amount to adjust (percentage for increase/decrease, multiplier for multiply)
+        """
+        return {
+            "success": True,
+            "action": "MUSIC_ADJUST_VOLUME",
+            "data": {"adjustment_type": adjustment_type, "amount": amount},
+            "message": f"Đang điều chỉnh âm lượng ({adjustment_type}, {amount})"
+        }
+    
     def music_search_play(self, song_name: str) -> Dict[str, Any]:
         """
         Search for a song by name and play it.
@@ -544,6 +565,7 @@ class AgentTools:
             "music_next": self.music_next,
             "music_prev": self.music_prev,
             "music_volume": self.music_volume,
+            "music_adjust_volume": self.music_adjust_volume,
             "music_search_play": self.music_search_play,
         }
         
@@ -709,7 +731,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "music_volume",
-        "description": "Điều chỉnh âm lượng nhạc. Use when user says 'tăng âm lượng', 'giảm âm lượng', 'volume', 'to hơn', 'nhỏ hơn'.",
+        "description": "Đặt âm lượng nhạc ở mức cố định (absolute). Sử dụng khi user nói 'đặt âm lượng 50%', 'volume 80%', 'âm lượng 30'. Chỉ dùng khi user nói rõ MỨC cụ thể.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -719,6 +741,25 @@ TOOL_DECLARATIONS = [
                 }
             },
             "required": ["level"]
+        }
+    },
+    {
+        "name": "music_adjust_volume",
+        "description": "Điều chỉnh âm lượng tương đối (relative). Sử dụng khi user muốn TĂNG hoặc GIẢM theo định lượng, không phải đặt mức cố định. Ví dụ: 'tăng âm lượng', 'giảm 10%', 'to hơn', 'nhỏ hơn', 'giảm 1 xíu', 'tăng gấp đôi', 'giảm còn một nửa'.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "adjustment_type": {
+                    "type": "string",
+                    "enum": ["increase", "decrease", "multiply", "increase_little", "decrease_little", "increase_lot", "decrease_lot"],
+                    "description": "Type: 'increase'/'decrease' (by amount%), 'multiply' (gấp đôi=2, một nửa=0.5), 'increase_little'/'decrease_little' (1 xíu/1 chút), 'increase_lot'/'decrease_lot' (nhiều)"
+                },
+                "amount": {
+                    "type": "number",
+                    "description": "Amount to adjust: percentage for increase/decrease (default 10), multiplier for multiply (2=double, 0.5=half)"
+                }
+            },
+            "required": ["adjustment_type"]
         }
     },
     {

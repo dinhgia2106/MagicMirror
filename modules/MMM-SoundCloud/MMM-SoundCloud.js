@@ -250,6 +250,48 @@ Module.register("MMM-SoundCloud", {
             case "MUSIC_RESTORE_VOLUME":
                 this.restoreVolume();
                 break;
+            case "MUSIC_ADJUST_VOLUME":
+                if (payload && payload.adjustment_type) {
+                    let targetVolume = this.isConversationActive ? this.previousVolume : this.volume;
+                    let amount = payload.amount || 10;
+
+                    switch (payload.adjustment_type) {
+                        case "increase":
+                            targetVolume = Math.min(100, targetVolume + amount);
+                            break;
+                        case "decrease":
+                            targetVolume = Math.max(0, targetVolume - amount);
+                            break;
+                        case "multiply":
+                            targetVolume = Math.min(100, Math.max(0, Math.round(targetVolume * amount)));
+                            break;
+                        case "increase_little":
+                            targetVolume = Math.min(100, targetVolume + 5);
+                            break;
+                        case "decrease_little":
+                            targetVolume = Math.max(0, targetVolume - 5);
+                            break;
+                        case "increase_lot":
+                            targetVolume = Math.min(100, targetVolume + 20);
+                            break;
+                        case "decrease_lot":
+                            targetVolume = Math.max(0, targetVolume - 20);
+                            break;
+                    }
+
+                    targetVolume = Math.round(targetVolume);
+
+                    if (this.isConversationActive) {
+                        // During conversation: queue volume change
+                        this.pendingVolume = targetVolume;
+                        Log.info("MMM-SoundCloud: Volume adjustment queued to " + targetVolume + "%");
+                    } else {
+                        // No conversation: apply immediately
+                        this.setVolume(targetVolume);
+                        Log.info("MMM-SoundCloud: Volume adjusted to " + targetVolume + "%");
+                    }
+                }
+                break;
             case "MUSIC_SEARCH_PLAY":
                 Log.info("MMM-SoundCloud: Received MUSIC_SEARCH_PLAY, payload: " + JSON.stringify(payload));
                 if (payload && payload.song_name) {
