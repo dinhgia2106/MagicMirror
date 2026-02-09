@@ -371,6 +371,12 @@ class WakeWordService:
     def start(self):
         """Start wake word detection"""
         try:
+            # Print version info for debugging
+            print(f"Picovoice Porcupine version: {pvporcupine.version}", file=sys.stderr)
+            print(f"Picovoice Recorder version: {PvRecorder.version}", file=sys.stderr)
+            print(f"PPN path: {self.ppn_path}", file=sys.stderr)
+            print(f"Access key (first 10 chars): {self.access_key[:10]}...", file=sys.stderr)
+            
             # Initialize Porcupine
             self.porcupine = pvporcupine.create(
                 access_key=self.access_key,
