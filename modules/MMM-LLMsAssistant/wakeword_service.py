@@ -50,27 +50,42 @@ except ImportError:
 class PvRecorderMicrophone:
     """
     Microphone class using PvRecorder for audio capture.
-    Uses the same audio backend as wake word detection for consistency.
+    Creates its own PvRecorder instance for speech capture.
     """
     
-    def __init__(self, sample_rate=16000):
+    def __init__(self, sample_rate=16000, frame_length=512):
         self.sample_rate = sample_rate
         self.SAMPLE_WIDTH = 2  # 2 bytes for 16-bit
         self.SAMPLE_RATE = sample_rate
+        self.frame_length = frame_length
         self.recorder = None
-        self.frame_length = 512  # PvRecorder default frame length
         # Sensitivity settings
         self.energy_threshold = 100
         self.pause_threshold = 1.5  # Seconds of silence to mark end of phrase
         self.phrase_threshold = 0.3  # Minimum seconds of speech
         self.non_speaking_duration = 0.5
+        # Calculate chunk duration
+        self.chunk_duration = frame_length / sample_rate
     
-    def set_recorder(self, recorder, frame_length):
-        """Set the PvRecorder instance to use"""
-        self.recorder = recorder
-        self.frame_length = frame_length
-        # Calculate chunk duration based on frame length and sample rate
-        self.chunk_duration = frame_length / self.sample_rate
+    def start(self):
+        """Start the recorder for speech capture"""
+        if self.recorder is None:
+            self.recorder = PvRecorder(
+                frame_length=self.frame_length,
+                device_index=-1
+            )
+        self.recorder.start()
+    
+    def stop(self):
+        """Stop the recorder"""
+        if self.recorder:
+            self.recorder.stop()
+    
+    def cleanup(self):
+        """Clean up recorder resources"""
+        if self.recorder:
+            self.recorder.delete()
+            self.recorder = None
     
     def __enter__(self):
         return self
@@ -262,7 +277,7 @@ class WakeWordService:
         self.porcupine = None
         self.recorder = None
         self.recognizer = sr.Recognizer()
-        self.microphone = PvRecorderMicrophone(sample_rate=16000)
+        self.microphone = None  # Will be initialized in start()
         
         # Speech recognition tuning to prevent early cutoff
         # pause_threshold: seconds of silence before considering speech done (default 0.8)
@@ -362,20 +377,27 @@ class WakeWordService:
                 keyword_paths=[self.ppn_path]
             )
             
-            # Initialize recorder
+            # Initialize recorder for wake word detection
             self.recorder = PvRecorder(
                 frame_length=self.porcupine.frame_length,
                 device_index=-1  # Default device
             )
             self.recorder.start()
             
-            # Share recorder with microphone for speech capture
-            self.microphone.set_recorder(self.recorder, self.porcupine.frame_length)
+            # Initialize microphone with same frame length for consistency
+            self.microphone = PvRecorderMicrophone(
+                sample_rate=self.porcupine.sample_rate,
+                frame_length=self.porcupine.frame_length
+            )
             
-            # Pre-adjust for ambient noise once at startup
+            # Pre-adjust for ambient noise once at startup (start microphone temporarily)
             try:
                 print("Adjusting for ambient noise...", file=sys.stderr)
+                self.recorder.stop()  # Stop wake word recorder
+                self.microphone.start()
                 self.microphone.adjust_for_ambient_noise(duration=0.8)
+                self.microphone.stop()
+                self.recorder.start()  # Restart wake word recorder
             except Exception as e:
                 print(f"Ambient noise adjustment warning: {e}", file=sys.stderr)
             
@@ -417,8 +439,9 @@ class WakeWordService:
     def handle_wake_word(self):
         """Handle wake word detection - start conversation flow"""
         try:
-            # NOTE: Do NOT stop the recorder here - we need it for speech capture
-            # The microphone.listen() will consume audio from the same recorder
+            # Stop wake word recorder and start microphone recorder
+            self.recorder.stop()
+            self.microphone.start()
             
             # Start new conversation or reset existing one
             self.reset_tts_state()  # Stop any previous audio
@@ -440,10 +463,12 @@ class WakeWordService:
         except Exception as e:
             self.emit("error", message=str(e))
         finally:
-            # End conversation - recorder stays running for next wake word
+            # End conversation and switch back to wake word recorder
             if self.conversation.is_active:
                 self.conversation.end_conversation()
                 self.emit("conversation_ended")
+            self.microphone.stop()
+            self.recorder.start()
     
     def conversation_loop(self):
         """Main conversation loop - continues until reset condition met"""
@@ -964,6 +989,8 @@ QUY TẮC PHẢN HỒI:
             
     def cleanup(self):
         """Cleanup resources"""
+        if self.microphone:
+            self.microphone.cleanup()
         if self.recorder:
             self.recorder.delete()
         if self.porcupine:
