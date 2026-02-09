@@ -371,19 +371,6 @@ class WakeWordService:
     def start(self):
         """Start wake word detection"""
         try:
-            # Print version info for debugging
-            try:
-                import pkg_resources
-                pv_version = pkg_resources.get_distribution("pvporcupine").version
-                pvr_version = pkg_resources.get_distribution("pvrecorder").version
-                print(f"Picovoice Porcupine version: {pv_version}", file=sys.stderr)
-                print(f"Picovoice Recorder version: {pvr_version}", file=sys.stderr)
-            except Exception as ve:
-                print(f"Could not get version info: {ve}", file=sys.stderr)
-            
-            print(f"PPN path: {self.ppn_path}", file=sys.stderr)
-            print(f"Access key (first 10 chars): {self.access_key[:10]}...", file=sys.stderr)
-            
             # Initialize Porcupine
             self.porcupine = pvporcupine.create(
                 access_key=self.access_key,
