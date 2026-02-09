@@ -204,8 +204,10 @@ class WakeWordService:
         """Emit JSON event to stdout for Node.js - uses base64 for text to avoid Windows encoding issues"""
         import base64
         event = {"type": event_type}
+        # Fields that should NOT be base64 encoded (action commands, etc)
+        no_encode_fields = {"action", "data", "command"}
         for key, value in kwargs.items():
-            if isinstance(value, str):
+            if isinstance(value, str) and key not in no_encode_fields:
                 # Base64 encode string values to avoid encoding issues
                 event[key] = base64.b64encode(value.encode('utf-8')).decode('ascii')
                 event[f"{key}_encoded"] = True
@@ -488,8 +490,6 @@ QUY TẮC:
                     sentence_buffer += token
                     
                     # Split into sentences for shorter TTS latency
-                    # Check for punctuation marks: . ? ! ; sent_end
-                    import re
                     # Split by sentence endings, keeping the ending
                     parts = re.split(r'([.?!;]+)', sentence_buffer)
                     
