@@ -18,6 +18,7 @@ import threading
 import re
 import time
 import queue
+import concurrent.futures
 
 # Force UTF-8 encoding for stdout/stderr on Windows
 if sys.platform == "win32":
@@ -322,7 +323,7 @@ class WakeWordService:
         )
 
     def _process_tts_queue(self):
-        """Worker thread to process TTS queue sequentially"""
+        """Worker thread to process TTS queue sequentially with phase-based async TTS"""
         while True:
             try:
                 text = self.tts_queue.get()
@@ -330,7 +331,8 @@ class WakeWordService:
                 
                 # Check stop flag before speaking
                 if not self.stop_tts_flag.is_set():
-                    self.speak(text)
+                    # Use phase-based async TTS for long text
+                    self.process_phases_async(text)
                 
                 self.tts_queue.task_done()
             except Exception as e:
@@ -600,6 +602,204 @@ class WakeWordService:
         text = re.sub(r'\n+', '. ', text)  # Replace newlines with periods
         text = re.sub(r'\s+', ' ', text)  # Normalize whitespace
         return text.strip()
+    
+    def split_into_phases(self, text, target_words=20):
+        """
+        Split text into phases of approximately target_words each.
+        If word N belongs to a sentence, include the whole sentence in current phase.
+        
+        Returns list of text phases.
+        """
+        if not text:
+            return []
+        
+        # Split into sentences (Vietnamese/English punctuation)
+        sentence_pattern = r'(?<=[.!?;:])\s+'
+        sentences = re.split(sentence_pattern, text.strip())
+        sentences = [s.strip() for s in sentences if s.strip()]
+        
+        if not sentences:
+            return [text] if text.strip() else []
+        
+        phases = []
+        current_phase = []
+        current_word_count = 0
+        
+        for sentence in sentences:
+            sentence_words = len(sentence.split())
+            
+            if current_word_count == 0:
+                # First sentence always goes to current phase
+                current_phase.append(sentence)
+                current_word_count += sentence_words
+            elif current_word_count + sentence_words <= target_words:
+                # Still fits within target
+                current_phase.append(sentence)
+                current_word_count += sentence_words
+            elif current_word_count >= target_words:
+                # Current phase is full, start new phase
+                phases.append(' '.join(current_phase))
+                current_phase = [sentence]
+                current_word_count = sentence_words
+            else:
+                # Adding this sentence would exceed target, but we haven't reached target yet
+                # Include it anyway (as per requirement: complete the sentence)
+                current_phase.append(sentence)
+                current_word_count += sentence_words
+                # If now at or over target, finalize this phase
+                if current_word_count >= target_words:
+                    phases.append(' '.join(current_phase))
+                    current_phase = []
+                    current_word_count = 0
+        
+        # Don't forget the last phase
+        if current_phase:
+            phases.append(' '.join(current_phase))
+        
+        return phases
+    
+    def generate_tts_audio(self, text):
+        """
+        Generate TTS audio file for given text and return the file path.
+        Returns None if generation fails.
+        """
+        import asyncio
+        
+        async def generate():
+            try:
+                import edge_tts
+                communicate = edge_tts.Communicate(text, self.voice_id)
+                temp_path = tempfile.mktemp(suffix=".mp3")
+                
+                with open(temp_path, "wb") as f:
+                    async for chunk in communicate.stream():
+                        if chunk["type"] == "audio":
+                            f.write(chunk["data"])
+                
+                return temp_path
+            except Exception as e:
+                self.emit("error", message=f"TTS generation error: {e}")
+                return None
+        
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(generate())
+        finally:
+            try:
+                loop.close()
+            except:
+                pass
+        
+        return result
+    
+    def play_audio_file(self, audio_path):
+        """Play an audio file and block until complete"""
+        if not audio_path or not os.path.exists(audio_path):
+            return
+        
+        try:
+            self.current_tts_process = subprocess.Popen(
+                ["mpv", "--no-terminal", "--no-video", audio_path],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            self.current_tts_process.wait()
+            self.current_tts_process = None
+        except FileNotFoundError:
+            try:
+                import pygame
+                pygame.mixer.init(frequency=24000)
+                pygame.mixer.music.load(audio_path)
+                pygame.mixer.music.play()
+                while pygame.mixer.music.get_busy():
+                    pygame.time.wait(50)
+                pygame.mixer.quit()
+            except ImportError:
+                if sys.platform == "win32":
+                    subprocess.run(["ffplay", "-nodisp", "-autoexit", audio_path],
+                                  capture_output=True)
+                else:
+                    os.system(f'mpg123 -q "{audio_path}" 2>/dev/null || ffplay -nodisp -autoexit "{audio_path}" 2>/dev/null')
+        
+        # Cleanup
+        try:
+            os.unlink(audio_path)
+        except:
+            pass
+    
+    def process_phases_async(self, text):
+        """
+        Process text with phase-based async TTS pipeline:
+        1. Split text into phases (~20 words each, keeping sentences whole)
+        2. Generate TTS for phase 1
+        3. While playing phase 1, generate remaining phases asynchronously
+        4. Play phases seamlessly one after another
+        """
+        if self.stop_tts_flag.is_set():
+            return
+        
+        phases = self.split_into_phases(text)
+        
+        if not phases:
+            return
+        
+        self.emit("debug", message=f"Split into {len(phases)} phases")
+        
+        if len(phases) == 1:
+            # Only one phase, no need for async
+            audio_path = self.generate_tts_audio(phases[0])
+            if audio_path and not self.stop_tts_flag.is_set():
+                self.play_audio_file(audio_path)
+            return
+        
+        # Generate phase 1 first
+        phase1_audio = self.generate_tts_audio(phases[0])
+        
+        if self.stop_tts_flag.is_set():
+            if phase1_audio:
+                try:
+                    os.unlink(phase1_audio)
+                except:
+                    pass
+            return
+        
+        # Start generating remaining phases asynchronously
+        remaining_phases = phases[1:]
+        future_audios = []
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            # Submit all remaining phases for generation
+            for phase_text in remaining_phases:
+                future = executor.submit(self.generate_tts_audio, phase_text)
+                future_audios.append(future)
+            
+            # Play phase 1 while others generate in background
+            if phase1_audio and not self.stop_tts_flag.is_set():
+                self.play_audio_file(phase1_audio)
+            
+            # Play remaining phases as they complete (in order)
+            for future in future_audios:
+                if self.stop_tts_flag.is_set():
+                    # Cancel remaining and cleanup
+                    for f in future_audios:
+                        if not f.done():
+                            f.cancel()
+                        else:
+                            try:
+                                audio = f.result()
+                                if audio:
+                                    os.unlink(audio)
+                            except:
+                                pass
+                    break
+                
+                try:
+                    audio_path = future.result(timeout=30)
+                    if audio_path and not self.stop_tts_flag.is_set():
+                        self.play_audio_file(audio_path)
+                except Exception as e:
+                    self.emit("error", message=f"Phase TTS error: {e}")
     
     def stream_gemini_response_with_context(self, text):
         """Stream response from Gemini with conversation context and function calling"""
