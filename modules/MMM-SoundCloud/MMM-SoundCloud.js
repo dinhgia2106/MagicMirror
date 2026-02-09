@@ -848,14 +848,12 @@ Module.register("MMM-SoundCloud", {
             return;
         }
 
-        Log.info("MMM-SoundCloud: Returning to saved playlist and track");
-        Log.info("MMM-SoundCloud: Saved index: " + this.savedTrackIndex + ", position: " + this.savedPosition);
+        Log.info("MMM-SoundCloud: Returning to saved playlist and track (starting from beginning)");
+        Log.info("MMM-SoundCloud: Saved index: " + this.savedTrackIndex);
 
         this.isPlayingSearched = false;
 
         const savedIndex = this.savedTrackIndex;
-        const savedPos = this.savedPosition;
-        const wasPaused = this.savedIsPaused;
         const playlistUrl = this.savedPlaylistUrl;
 
         // Reset saved state
@@ -872,22 +870,16 @@ Module.register("MMM-SoundCloud", {
                 // Load the original playlist
                 Log.info("MMM-SoundCloud: Reloading original playlist: " + playlistUrl);
                 this.widget.load(playlistUrl, {
-                    auto_play: !wasPaused,
+                    auto_play: true,
                     show_artwork: this.config.showArtwork,
                     callback: () => {
-                        Log.info("MMM-SoundCloud: Playlist reloaded, skipping to track " + savedIndex);
-                        // After playlist loads, skip to saved track
+                        Log.info("MMM-SoundCloud: Playlist reloaded, playing track " + savedIndex + " from beginning");
+                        // After playlist loads, skip to saved track and play from start
                         setTimeout(() => {
                             this.widget.skip(savedIndex);
-                            setTimeout(() => {
-                                if (savedPos > 0) {
-                                    this.widget.seekTo(savedPos);
-                                }
-                                if (wasPaused) {
-                                    this.widget.pause();
-                                }
-                                Log.info("MMM-SoundCloud: Restored to previous state");
-                            }, 300);
+                            // Play from beginning
+                            this.widget.play();
+                            Log.info("MMM-SoundCloud: Restored - playing from beginning");
                         }, 500);
                     }
                 });
@@ -895,15 +887,9 @@ Module.register("MMM-SoundCloud", {
                 // Already on the playlist, just skip to the track
                 this.widget.skip(savedIndex);
                 setTimeout(() => {
-                    if (savedPos > 0) {
-                        this.widget.seekTo(savedPos);
-                    }
-                    if (wasPaused) {
-                        this.widget.pause();
-                    } else {
-                        this.widget.play();
-                    }
-                    Log.info("MMM-SoundCloud: Restored to previous state");
+                    // Always play from beginning
+                    this.widget.play();
+                    Log.info("MMM-SoundCloud: Restored - playing track from beginning");
                 }, 500);
             }
         });

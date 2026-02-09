@@ -140,13 +140,19 @@ class WakeWordService:
         self.tts_thread = threading.Thread(target=self._process_tts_queue, daemon=True)
         self.tts_thread.start()        
         
-        # Initialize agent tools for function calling
         self.agent_tools = AgentTools({
             "holiday_api_url": "http://192.168.1.11:8000/api/holidays",
             "lat": 16.463713,
             "lon": 107.590866,
             "timezone": "Asia/Ho_Chi_Minh"
         })
+
+        # Centralized system prompt
+        self.system_prompt = (
+            "Bạn là Lens, một trợ lý cá nhân thông minh được lập trình và thực hiện bởi Gia. "
+            "Bạn có nhiệm vụ hỗ trợ Gia thực hiện các tác vụ cá nhân hàng ngày. "
+            "Hãy trả lời một cách tự nhiên, ngắn gọn và hữu ích hoàn toàn bằng tiếng Việt."
+        )
 
     def _process_tts_queue(self):
         """Worker thread to process TTS queue sequentially"""
@@ -430,13 +436,12 @@ class WakeWordService:
             import datetime
             now_str = datetime.datetime.now().strftime("%A, %d/%m/%Y %H:%M:%S")
             
-            system_instruction = f"""Bạn là Lens, một trợ lý cá nhân thông minh.
-THÔNG TIN: {now_str}
-QUY TẮC:
-- Trả lời ngắn gọn, tự nhiên bằng tiếng Việt.
-- KHÔNG dùng markdown (*, _).
-- Dùng tool cho thời tiết, ngày lễ.
-- Nếu thông tin sai, hãy kiểm tra lại bằng tool."""
+            system_instruction = f"""{self.system_prompt}
+THÔNG TIN HIỆN TẠI: {now_str}
+QUY TẮC PHẢN HỒI:
+- KHÔNG sử dụng định dạng markdown (như *, _, `).
+- Luôn sử dụng các công cụ (tools) được cung cấp để tra cứu thời tiết hoặc các ngày lễ nếu cần.
+- Nếu thông tin hiện tại có vẻ không chính xác, hãy chủ động kiểm tra lại bằng công cụ."""
 
             # Create model with tools
             model = genai.GenerativeModel(
@@ -601,7 +606,7 @@ QUY TẮC:
             model = genai.GenerativeModel('gemini-2.5-flash')
             
             context = self.conversation.get_context_prompt()
-            system_prompt = "You are Lens, a smart personal assistant created by Gia. Respond concisely."
+            system_prompt = self.system_prompt
             
             if context:
                 prompt = f"{system_prompt}\n\n{context}\nUser: {text}\nLens:"
@@ -631,7 +636,7 @@ QUY TẮC:
             
             # Build messages with conversation history
             messages = [
-                {"role": "system", "content": "You are Lens, a smart Vietnamese assistant created by Gia. Respond concisely."}
+                {"role": "system", "content": self.system_prompt}
             ]
             
             # Add conversation history
@@ -674,7 +679,7 @@ QUY TẮC:
             model = genai.GenerativeModel('gemini-2.5-flash')
             
             response = model.generate_content(
-                f"You are Lens, a smart Vietnamese personal assistant created by Gia. Respond concisely. User: {text}",
+                f"{self.system_prompt} User yêu cầu: {text}",
                 generation_config={"max_output_tokens": 500}
             )
             return response.text
@@ -696,7 +701,7 @@ QUY TẮC:
             response = client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
-                    {"role": "system", "content": "You are Lens, a smart assistant created by Gia. Respond concisely and helpfully in Vietnamese."},
+                    {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": text}
                 ]
             )
