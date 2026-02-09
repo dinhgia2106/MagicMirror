@@ -2,7 +2,7 @@
 pvporcupine>=4.0.0
 pvrecorder>=1.2.0
 SpeechRecognition>=3.10.0
-google-generativeai>=0.5.0
+google-genai
 edge-tts>=6.1.0
 numpy>=1.24.0
 pygame

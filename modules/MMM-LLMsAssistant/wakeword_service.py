@@ -594,44 +594,41 @@ class WakeWordService:
     def stream_gemini_response_with_context(self, text):
         """Stream response from Gemini with conversation context and function calling"""
         try:
-            import google.generativeai as genai
+            from google import genai
+            from google.genai import types
             
             self.emit("debug", message="Starting Gemini API call (Streaming)...")
             
-            genai.configure(api_key=self.llm_api_key)
+            # Create client with API key
+            client = genai.Client(api_key=self.llm_api_key)
             
             # System instruction
             import datetime
             now_str = datetime.datetime.now().strftime("%A, %d/%m/%Y %H:%M:%S")
             
             system_instruction = f"""{self.system_prompt}
-THÔNG TIN HIỆN TẠI: {now_str}
-QUY TẮC PHẢN HỒI:
-- KHÔNG sử dụng định dạng markdown (như *, _, `).
-- Luôn sử dụng các công cụ (tools) được cung cấp để tra cứu thời tiết hoặc các ngày lễ nếu cần.
-- Nếu thông tin hiện tại có vẻ không chính xác, hãy chủ động kiểm tra lại bằng công cụ."""
+THONG TIN HIEN TAI: {now_str}
+QUY TAC PHAN HOI:
+- KHONG su dung dinh dang markdown (nhu *, _, `).
+- Luon su dung cac cong cu (tools) duoc cung cap de tra cuu thoi tiet hoac cac ngay le neu can.
+- Neu thong tin hien tai co ve khong chinh xac, hay chu dong kiem tra lai bang cong cu."""
 
-            # Create model with tools
-            model = genai.GenerativeModel(
-                'gemini-2.5-flash',
-                tools=[get_gemini_tools()],
-                system_instruction=system_instruction
-            )
-            
-            # Build history
-            gemini_history = []
+            # Build conversation history for the new SDK format
+            history = []
             for msg in self.conversation.history[:-1]:
                 role = "user" if msg["role"] == "user" else "model"
-                gemini_history.append({"role": role, "parts": [msg["content"]]})
+                history.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
             
-            chat = model.start_chat(history=gemini_history, enable_automatic_function_calling=False)
-            
-            # 1. Send message with STREAMING enabled
-            # Explicitly set max_output_tokens to prevent early truncation
-            response_stream = chat.send_message(
-                text, 
-                stream=True,
-                generation_config={"max_output_tokens": 2048}
+            # Create chat session
+            chat = client.chats.create(
+                model='gemini-2.5-flash',
+                config=types.GenerateContentConfig(
+                    system_instruction=system_instruction,
+                    tools=[get_gemini_tools()],
+                    automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                    max_output_tokens=2048
+                ),
+                history=history
             )
             
             full_text = ""
@@ -639,10 +636,10 @@ QUY TẮC PHẢN HỒI:
             function_calls = []
             music_tool_called = False
             
-            # Handle the stream
-            for chunk in response_stream:
+            # Stream the response
+            for chunk in chat.send_message_stream(text):
                 # Check for function calls
-                if chunk.candidates and chunk.candidates[0].content.parts:
+                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
                     for part in chunk.candidates[0].content.parts:
                         if part.function_call:
                             function_calls.append(part.function_call)
@@ -651,35 +648,25 @@ QUY TẮC PHẢN HỒI:
                 if function_calls:
                     continue
                 
-                # Process Text content
-                # Use safety check for candidates before accessing text
-                if chunk.candidates and chunk.candidates[0].content.parts:
-                    try:
-                        token = chunk.text
-                    except ValueError:
-                        # Handle cases where chunk has no text (e.g. safety block or other finish reason)
-                        continue
-                        
+                # Process text content
+                if chunk.text:
+                    token = chunk.text
                     full_text += token
                     sentence_buffer += token
                     
                     # Split into sentences for shorter TTS latency
-                    # Split by sentence endings, keeping the ending
                     parts = re.split(r'([.?!;]+)', sentence_buffer)
                     
                     if len(parts) > 1:
-                        # We have complete sentences
                         for i in range(0, len(parts) - 1, 2):
                             sentence = parts[i] + parts[i+1]
                             clean_sent = self.clean_text_for_tts(sentence)
                             if clean_sent:
                                 self.tts_queue.put(clean_sent)
-                                self.emit("llm_response", text=clean_sent + " ") # Emit incremental text
-                        
-                        # Keep the remainder
+                                self.emit("llm_response", text=clean_sent + " ")
                         sentence_buffer = parts[-1]
             
-            # If there were function calls, we need to execute them and get the FINAL answer
+            # If there were function calls, execute them and get the final answer
             if function_calls:
                 self.emit("debug", message=f"Processing {len(function_calls)} function call(s)...")
                 
@@ -687,7 +674,7 @@ QUY TẮC PHẢN HỒI:
                 function_responses = []
                 for fc in function_calls:
                     tool_name = fc.name
-                    tool_args = dict(fc.args)
+                    tool_args = dict(fc.args) if fc.args else {}
                     self.emit("debug", message=f"Calling {tool_name} with {tool_args}...")
                     result = self.agent_tools.execute_tool(tool_name, tool_args)
                     
@@ -696,39 +683,21 @@ QUY TẮC PHẢN HỒI:
                         self.emit("music_action", action=result["action"], data=result.get("data", {}))
                         music_tool_called = True
                     
-                    function_responses.append({
-                        "name": tool_name,
-                        "response": result
-                    })
-                
-                # Send tool results back to Gemini (Streaming again)
-                parts_to_send = []
-                for fr in function_responses:
-                    parts_to_send.append({
-                        "function_response": {
-                            "name": fr["name"],
-                            "response": {"result": json.dumps(fr["response"], ensure_ascii=False)}
-                        }
-                    })
-                
-                # Stream the final response after tool execution
-                final_stream = chat.send_message(
-                    parts_to_send, 
-                    stream=True, 
-                    generation_config={"max_output_tokens": 2048}
-                )
+                    function_responses.append(
+                        types.Part.from_function_response(
+                            name=tool_name,
+                            response={"result": json.dumps(result, ensure_ascii=False)}
+                        )
+                    )
                 
                 # Reset buffers for final response
-                full_text = ""  # Reset full_text because the previous text (if any) was likely just thought process or discarded
+                full_text = ""
                 sentence_buffer = ""
                 
-                for chunk in final_stream:
-                    if chunk.candidates and chunk.candidates[0].content.parts:
-                        try:
-                            token = chunk.text
-                        except ValueError:
-                            continue
-                            
+                # Send tool results back to Gemini (Streaming again)
+                for chunk in chat.send_message_stream(function_responses):
+                    if chunk.text:
+                        token = chunk.text
                         full_text += token
                         sentence_buffer += token
                         
@@ -753,7 +722,7 @@ QUY TẮC PHẢN HỒI:
 
         except Exception as e:
             self.emit("error", message=f"Gemini Streaming Error: {e}")
-            fallback = "Xin lỗi, có lỗi xảy ra."
+            fallback = "Xin loi, co loi xay ra."
             self.tts_queue.put(fallback)
             return fallback, False    
     def get_llm_response_with_context(self, text):
@@ -768,10 +737,10 @@ QUY TẮC PHẢN HỒI:
     def get_gemini_response_with_context(self, text):
         """Get response from Gemini with context (non-streaming)"""
         try:
-            import google.generativeai as genai
+            from google import genai
+            from google.genai import types
             
-            genai.configure(api_key=self.llm_api_key)
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            client = genai.Client(api_key=self.llm_api_key)
             
             context = self.conversation.get_context_prompt()
             system_prompt = self.system_prompt
@@ -781,9 +750,10 @@ QUY TẮC PHẢN HỒI:
             else:
                 prompt = f"{system_prompt}\n\nUser: {text}\nLens:"
             
-            response = model.generate_content(
-                prompt,
-                generation_config={"max_output_tokens": 700}
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt,
+                config=types.GenerateContentConfig(max_output_tokens=700)
             )
             return response.text
         except Exception as e:
@@ -841,14 +811,15 @@ QUY TẮC PHẢN HỒI:
     def get_gemini_response(self, text):
         """Get response from Google Gemini (non-streaming)"""
         try:
-            import google.generativeai as genai
+            from google import genai
+            from google.genai import types
             
-            genai.configure(api_key=self.llm_api_key)
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            client = genai.Client(api_key=self.llm_api_key)
             
-            response = model.generate_content(
-                f"{self.system_prompt} User yêu cầu: {text}",
-                generation_config={"max_output_tokens": 500}
+            response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=f"{self.system_prompt} User yeu cau: {text}",
+                config=types.GenerateContentConfig(max_output_tokens=500)
             )
             return response.text
         except Exception as e:

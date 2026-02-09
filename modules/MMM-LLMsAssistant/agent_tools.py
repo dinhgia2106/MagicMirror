@@ -739,10 +739,20 @@ TOOL_DECLARATIONS = [
 
 
 def get_gemini_tools():
-    """Get tools in format for Gemini API"""
-    return {
-        "function_declarations": TOOL_DECLARATIONS
-    }
+    """Get tools in format for new Google GenAI SDK"""
+    from google.genai import types
+    
+    declarations = []
+    for decl in TOOL_DECLARATIONS:
+        declarations.append(
+            types.FunctionDeclaration(
+                name=decl["name"],
+                description=decl["description"],
+                parameters=decl["parameters"]
+            )
+        )
+    
+    return types.Tool(function_declarations=declarations)
 
 
 if __name__ == "__main__":
