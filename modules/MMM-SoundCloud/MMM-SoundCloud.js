@@ -26,7 +26,8 @@ Module.register("MMM-SoundCloud", {
         this.currentPosition = 0;
         this.duration = 0;
         this.isShuffled = false;
-        this.originalOrder = [];
+        this.shuffleQueue = [];      // Queue of unplayed track indices
+        this.totalTracks = 0;        // Total number of tracks in playlist
     },
 
     getDom: function () {
@@ -359,7 +360,11 @@ Module.register("MMM-SoundCloud", {
 
     next: function () {
         if (this.widget && this.widgetReady) {
-            this.widget.next();
+            if (this.isShuffled) {
+                this.playRandomTrack();
+            } else {
+                this.widget.next();
+            }
         }
     },
 
@@ -510,22 +515,36 @@ Module.register("MMM-SoundCloud", {
             }
         }
 
-        // Get all sounds and shuffle
-        this.widget.getSounds((sounds) => {
-            if (!sounds || sounds.length === 0) return;
+        if (this.isShuffled) {
+            // Reset and build shuffle queue
+            this.shuffleQueue = [];
+            this.widget.getSounds((sounds) => {
+                if (!sounds || sounds.length === 0) return;
 
-            if (this.isShuffled) {
-                // Store original order
-                this.originalOrder = sounds.map((s, i) => i);
+                this.totalTracks = sounds.length;
 
-                // Pick a random track to play
-                const randomIndex = Math.floor(Math.random() * sounds.length);
-                this.widget.skip(randomIndex);
-                Log.info("MMM-SoundCloud: Shuffle ON - playing random track");
-            } else {
-                Log.info("MMM-SoundCloud: Shuffle OFF");
-            }
-        });
+                // Get current track index to exclude from shuffle
+                this.widget.getCurrentSoundIndex((currentIndex) => {
+                    // Build queue excluding current track
+                    for (let i = 0; i < sounds.length; i++) {
+                        if (i !== currentIndex) {
+                            this.shuffleQueue.push(i);
+                        }
+                    }
+                    // Fisher-Yates shuffle
+                    for (let i = this.shuffleQueue.length - 1; i > 0; i--) {
+                        const j = Math.floor(Math.random() * (i + 1));
+                        [this.shuffleQueue[i], this.shuffleQueue[j]] = [this.shuffleQueue[j], this.shuffleQueue[i]];
+                    }
+
+                    Log.info("MMM-SoundCloud: Shuffle ON - queue built with " + this.shuffleQueue.length + " tracks (excluding current)");
+                });
+            });
+        } else {
+            // Clear queue when shuffle is turned off
+            this.shuffleQueue = [];
+            Log.info("MMM-SoundCloud: Shuffle OFF");
+        }
 
         this.sendNotification("MUSIC_SHUFFLE_CHANGED", { isShuffled: this.isShuffled });
     },
@@ -536,16 +555,42 @@ Module.register("MMM-SoundCloud", {
         this.widget.getSounds((sounds) => {
             if (!sounds || sounds.length === 0) return;
 
-            // Get current track index
-            this.widget.getCurrentSoundIndex((currentIndex) => {
-                // Pick a random index different from current
-                let randomIndex;
-                do {
-                    randomIndex = Math.floor(Math.random() * sounds.length);
-                } while (randomIndex === currentIndex && sounds.length > 1);
+            this.totalTracks = sounds.length;
 
-                this.widget.skip(randomIndex);
-                Log.info("MMM-SoundCloud: Shuffle - playing track " + randomIndex);
+            // If queue is empty, refill it with all track indices
+            if (this.shuffleQueue.length === 0) {
+                this.shuffleQueue = [];
+                for (let i = 0; i < sounds.length; i++) {
+                    this.shuffleQueue.push(i);
+                }
+                // Shuffle the queue (Fisher-Yates)
+                for (let i = this.shuffleQueue.length - 1; i > 0; i--) {
+                    const j = Math.floor(Math.random() * (i + 1));
+                    [this.shuffleQueue[i], this.shuffleQueue[j]] = [this.shuffleQueue[j], this.shuffleQueue[i]];
+                }
+                Log.info("MMM-SoundCloud: Shuffle queue refilled with " + sounds.length + " tracks");
+            }
+
+            // Get current track index to avoid playing same track
+            this.widget.getCurrentSoundIndex((currentIndex) => {
+                // Remove current track from queue if present
+                const currentInQueue = this.shuffleQueue.indexOf(currentIndex);
+                if (currentInQueue > -1 && this.shuffleQueue.length > 1) {
+                    this.shuffleQueue.splice(currentInQueue, 1);
+                }
+
+                // Pick next track from queue
+                const nextIndex = this.shuffleQueue.shift();
+
+                if (nextIndex !== undefined) {
+                    this.widget.skip(nextIndex);
+                    Log.info("MMM-SoundCloud: Shuffle - playing track " + nextIndex + " (" + this.shuffleQueue.length + " remaining)");
+                } else {
+                    // Fallback: pick random
+                    const randomIndex = Math.floor(Math.random() * sounds.length);
+                    this.widget.skip(randomIndex);
+                    Log.info("MMM-SoundCloud: Shuffle fallback - playing track " + randomIndex);
+                }
             });
         });
     },
