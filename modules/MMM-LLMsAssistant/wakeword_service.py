@@ -41,35 +41,36 @@ except ImportError:
     sys.exit(1)
 
 try:
-    import sounddevice as sd
     import numpy as np
-    from scipy.io import wavfile
-    import io
 except ImportError:
-    print(json.dumps({"type": "error", "message": "Please install: pip install sounddevice scipy numpy"}))
+    print(json.dumps({"type": "error", "message": "Please install: pip install numpy"}))
     sys.exit(1)
 
 
-class SoundDeviceMicrophone:
+class PvRecorderMicrophone:
     """
-    Custom Microphone class using sounddevice instead of PyAudio.
-    Provides voice activity detection and audio capture for SpeechRecognition.
+    Microphone class using PvRecorder for audio capture.
+    Uses the same audio backend as wake word detection for consistency.
     """
     
-    def __init__(self, device_index=None, sample_rate=16000, chunk_duration=0.1):
-        self.device_index = device_index
+    def __init__(self, sample_rate=16000):
         self.sample_rate = sample_rate
-        self.chunk_duration = chunk_duration  # Duration of each audio chunk in seconds
-        self.chunk_size = int(sample_rate * chunk_duration)
         self.SAMPLE_WIDTH = 2  # 2 bytes for 16-bit
         self.SAMPLE_RATE = sample_rate
-        self.energy_threshold = 300  # Minimum audio energy to be considered speech
-        self.dynamic_energy_threshold = True
-        self.dynamic_energy_adjustment_damping = 0.15
-        self.dynamic_energy_ratio = 1.5
+        self.recorder = None
+        self.frame_length = 512  # PvRecorder default frame length
+        # Sensitivity settings
+        self.energy_threshold = 100
         self.pause_threshold = 1.5  # Seconds of silence to mark end of phrase
-        self.phrase_threshold = 0.3  # Minimum seconds of speech to be considered a phrase
-        self.non_speaking_duration = 0.5  # Seconds of non-speaking audio to keep
+        self.phrase_threshold = 0.3  # Minimum seconds of speech
+        self.non_speaking_duration = 0.5
+    
+    def set_recorder(self, recorder, frame_length):
+        """Set the PvRecorder instance to use"""
+        self.recorder = recorder
+        self.frame_length = frame_length
+        # Calculate chunk duration based on frame length and sample rate
+        self.chunk_duration = frame_length / self.sample_rate
     
     def __enter__(self):
         return self
@@ -78,34 +79,33 @@ class SoundDeviceMicrophone:
         pass
     
     def adjust_for_ambient_noise(self, duration=1.0):
-        """Adjust energy threshold based on ambient noise"""
-        try:
-            frames = int(duration * self.sample_rate)
-            recording = sd.rec(frames, samplerate=self.sample_rate, channels=1,
-                              dtype='int16', device=self.device_index)
-            sd.wait()
+        """Adjust energy threshold based on ambient noise using PvRecorder"""
+        if not self.recorder:
+            return
             
-            # Calculate energy of ambient noise
-            energy = np.sqrt(np.mean(recording.astype(np.float64) ** 2))
-            self.energy_threshold = energy * self.dynamic_energy_ratio + 100
+        try:
+            frames_needed = int(duration * self.sample_rate / self.frame_length)
+            energy_samples = []
+            
+            for _ in range(frames_needed):
+                pcm = self.recorder.read()
+                audio_array = np.array(pcm, dtype=np.int16)
+                energy = np.sqrt(np.mean(audio_array.astype(np.float64) ** 2))
+                energy_samples.append(energy)
+            
+            avg_energy = np.mean(energy_samples)
+            # Set threshold slightly above ambient noise
+            self.energy_threshold = avg_energy * 1.5 + 50
         except Exception:
             pass
     
     def listen(self, timeout=None, phrase_time_limit=None):
         """
-        Listen for speech and return AudioData when speech ends.
-        
-        Args:
-            timeout: Maximum time to wait for speech to begin (None = infinite)
-            phrase_time_limit: Maximum time for a phrase (None = infinite)
-            
-        Returns:
-            sr.AudioData object containing the recorded speech
-            
-        Raises:
-            sr.WaitTimeoutError: If timeout reached before speech detected
+        Listen for speech using PvRecorder and return AudioData when speech ends.
         """
-        frames_per_chunk = self.chunk_size
+        if not self.recorder:
+            raise RuntimeError("PvRecorder not set. Call set_recorder() first.")
+        
         pause_chunks = int(self.pause_threshold / self.chunk_duration)
         phrase_chunks = int(self.phrase_threshold / self.chunk_duration)
         
@@ -127,54 +127,44 @@ class SoundDeviceMicrophone:
                 if time.time() - speech_start_time > phrase_time_limit:
                     break
             
-            # Record a chunk
+            # Read audio from PvRecorder
             try:
-                chunk = sd.rec(frames_per_chunk, samplerate=self.sample_rate, 
-                              channels=1, dtype='int16', device=self.device_index)
-                sd.wait()
-                chunk = chunk.flatten()
-            except Exception as e:
+                pcm = self.recorder.read()
+                audio_array = np.array(pcm, dtype=np.int16)
+            except Exception:
                 continue
             
-            # Calculate energy of this chunk
-            energy = np.sqrt(np.mean(chunk.astype(np.float64) ** 2))
-            
-            # Dynamic threshold adjustment
-            if self.dynamic_energy_threshold and not speech_started:
-                damping = self.dynamic_energy_adjustment_damping
-                self.energy_threshold = (self.energy_threshold * (1 - damping) + 
-                                        energy * self.dynamic_energy_ratio * damping)
-            
+            # Calculate energy
+            energy = np.sqrt(np.mean(audio_array.astype(np.float64) ** 2))
             is_speech = energy > self.energy_threshold
             
             if is_speech:
                 if not speech_started:
                     speech_started = True
                     speech_start_time = time.time()
-                    # Include some pre-speech buffer if we have it
+                    # Keep some pre-speech buffer
                     pre_buffer_chunks = int(self.non_speaking_duration / self.chunk_duration)
                     if len(audio_buffer) > pre_buffer_chunks:
                         audio_buffer = audio_buffer[-pre_buffer_chunks:]
                 
-                audio_buffer.append(chunk)
+                audio_buffer.append(audio_array)
                 speech_chunks += 1
                 silent_chunks = 0
             else:
                 if speech_started:
-                    audio_buffer.append(chunk)  # Include silence during speech
+                    audio_buffer.append(audio_array)
                     silent_chunks += 1
                     
-                    # Check if pause is long enough to end phrase
                     if silent_chunks >= pause_chunks and speech_chunks >= phrase_chunks:
                         break
                 else:
-                    # Keep a small buffer of pre-speech audio
-                    audio_buffer.append(chunk)
-                    max_buffer = int(2.0 / self.chunk_duration)  # Max 2 seconds of buffer
+                    # Pre-speech buffer
+                    audio_buffer.append(audio_array)
+                    max_buffer = int(2.0 / self.chunk_duration)
                     if len(audio_buffer) > max_buffer:
                         audio_buffer.pop(0)
         
-        # Combine all chunks and convert to AudioData
+        # Combine and convert to AudioData
         if audio_buffer:
             audio_data = np.concatenate(audio_buffer)
             audio_bytes = audio_data.astype(np.int16).tobytes()
@@ -272,7 +262,7 @@ class WakeWordService:
         self.porcupine = None
         self.recorder = None
         self.recognizer = sr.Recognizer()
-        self.microphone = SoundDeviceMicrophone(sample_rate=16000)
+        self.microphone = PvRecorderMicrophone(sample_rate=16000)
         
         # Speech recognition tuning to prevent early cutoff
         # pause_threshold: seconds of silence before considering speech done (default 0.8)
@@ -379,6 +369,9 @@ class WakeWordService:
             )
             self.recorder.start()
             
+            # Share recorder with microphone for speech capture
+            self.microphone.set_recorder(self.recorder, self.porcupine.frame_length)
+            
             # Pre-adjust for ambient noise once at startup
             try:
                 print("Adjusting for ambient noise...", file=sys.stderr)
@@ -424,8 +417,8 @@ class WakeWordService:
     def handle_wake_word(self):
         """Handle wake word detection - start conversation flow"""
         try:
-            # Stop Porcupine recorder temporarily
-            self.recorder.stop()
+            # NOTE: Do NOT stop the recorder here - we need it for speech capture
+            # The microphone.listen() will consume audio from the same recorder
             
             # Start new conversation or reset existing one
             self.reset_tts_state()  # Stop any previous audio
@@ -447,11 +440,10 @@ class WakeWordService:
         except Exception as e:
             self.emit("error", message=str(e))
         finally:
-            # End conversation and restart Porcupine recorder
+            # End conversation - recorder stays running for next wake word
             if self.conversation.is_active:
                 self.conversation.end_conversation()
                 self.emit("conversation_ended")
-            self.recorder.start()
     
     def conversation_loop(self):
         """Main conversation loop - continues until reset condition met"""
@@ -467,7 +459,7 @@ class WakeWordService:
                 self.emit("listening")
                 
                 try:
-                    # Listen with timeout using sounddevice
+                    # Listen with timeout using PvRecorder
                     audio = self.microphone.listen(
                         timeout=SILENCE_TIMEOUT, 
                         phrase_time_limit=15
