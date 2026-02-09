@@ -17,7 +17,7 @@ class AgentTools:
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}
         # Backend API URL for holidays
-        self.holiday_api_url = self.config.get("holiday_api_url", "http://192.168.1.11:8000/api/holidays")
+        self.holiday_api_url = self.config.get("holiday_api_url", "http://127.0.0.1:8000/api/holidays")
         # OpenMeteo API for weather
         self.weather_lat = self.config.get("lat", 16.463713)
         self.weather_lon = self.config.get("lon", 107.590866)
