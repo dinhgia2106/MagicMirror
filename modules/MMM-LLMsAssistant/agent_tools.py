@@ -438,6 +438,66 @@ class AgentTools:
         except requests.RequestException as e:
             return {"success": False, "error": f"Weather API error: {str(e)}"}
     
+    # ==================== MUSIC CONTROL TOOLS ====================
+    
+    def music_play(self) -> Dict[str, Any]:
+        """
+        Play music - send play command to MMM-SoundCloud module.
+        """
+        return {
+            "success": True,
+            "action": "MUSIC_PLAY",
+            "data": {"command": "play"},
+            "message": "Đã phát nhạc"
+        }
+    
+    def music_pause(self) -> Dict[str, Any]:
+        """
+        Pause music - send pause command to MMM-SoundCloud module.
+        """
+        return {
+            "success": True,
+            "action": "MUSIC_PAUSE", 
+            "data": {"command": "pause"},
+            "message": "Đã tạm dừng nhạc"
+        }
+    
+    def music_next(self) -> Dict[str, Any]:
+        """
+        Play next track - send next command to MMM-SoundCloud module.
+        """
+        return {
+            "success": True,
+            "action": "MUSIC_NEXT",
+            "data": {"command": "next"},
+            "message": "Đã chuyển sang bài tiếp theo"
+        }
+    
+    def music_prev(self) -> Dict[str, Any]:
+        """
+        Play previous track - send prev command to MMM-SoundCloud module.
+        """
+        return {
+            "success": True,
+            "action": "MUSIC_PREV",
+            "data": {"command": "prev"},
+            "message": "Đã quay lại bài trước"
+        }
+    
+    def music_volume(self, level: int) -> Dict[str, Any]:
+        """
+        Set music volume.
+        Args:
+            level: Volume level (0-100)
+        """
+        level = max(0, min(100, level))
+        return {
+            "success": True,
+            "action": "MUSIC_SET_VOLUME",
+            "data": {"volume": level},
+            "message": f"Đã đặt âm lượng {level}%"
+        }
+    
     # ==================== UTILITY METHODS ====================
     
     def execute_tool(self, tool_name: str, arguments: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -458,6 +518,12 @@ class AgentTools:
             "check_holiday": self.check_holiday,
             "get_current_weather": self.get_current_weather,
             "get_weather_forecast": self.get_weather_forecast,
+            # Music control tools
+            "music_play": self.music_play,
+            "music_pause": self.music_pause,
+            "music_next": self.music_next,
+            "music_prev": self.music_prev,
+            "music_volume": self.music_volume,
         }
         
         if tool_name not in tool_map:
@@ -581,6 +647,57 @@ TOOL_DECLARATIONS = [
                 }
             },
             "required": []
+        }
+    },
+    # Music control tools
+    {
+        "name": "music_play",
+        "description": "Bật nhạc, phát nhạc, mở nhạc. Use when user says 'bật nhạc', 'phát nhạc', 'play music', 'mở nhạc', 'chơi nhạc'.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "music_pause",
+        "description": "Tạm dừng nhạc, pause. Use when user says 'dừng lại', 'tạm dừng', 'pause', 'tắt nhạc', 'ngừng nhạc', 'stop music'.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "music_next",
+        "description": "Chuyển sang bài tiếp theo. Use when user says 'bài tiếp', 'next', 'bài khác', 'chuyển bài', 'skip'.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "music_prev",
+        "description": "Quay lại bài trước. Use when user says 'bài trước', 'previous', 'quay lại', 'lui lại'.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    },
+    {
+        "name": "music_volume",
+        "description": "Điều chỉnh âm lượng nhạc. Use when user says 'tăng âm lượng', 'giảm âm lượng', 'volume', 'to hơn', 'nhỏ hơn'.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "level": {
+                    "type": "integer",
+                    "description": "Volume level from 0 to 100"
+                }
+            },
+            "required": ["level"]
         }
     }
 ]

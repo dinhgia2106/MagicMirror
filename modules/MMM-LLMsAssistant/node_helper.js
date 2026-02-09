@@ -201,6 +201,25 @@ module.exports = NodeHelper.create({
                 this.sendSocketNotification("ERROR", { message: message });
                 break;
             }
+
+            // Music control events
+            case "music_lower_volume":
+                console.log("[MMM-LLMsAssistant] Lowering music volume for conversation");
+                this.sendSocketNotification("MUSIC_LOWER_VOLUME", {});
+                break;
+
+            case "music_restore_volume":
+                console.log("[MMM-LLMsAssistant] Restoring music volume");
+                this.sendSocketNotification("MUSIC_RESTORE_VOLUME", {});
+                break;
+
+            case "music_action": {
+                const action = event.action;
+                const data = event.data || {};
+                console.log(`[MMM-LLMsAssistant] Music action: ${action}`);
+                this.sendSocketNotification(action, data);
+                break;
+            }
         }
     },
 

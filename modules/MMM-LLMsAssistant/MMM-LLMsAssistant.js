@@ -123,6 +123,24 @@ Module.register("MMM-LLMsAssistant", {
                 this.isConversationActive = false;
                 this.updateDom(300);
                 break;
+
+            // Music control notifications - forward to MMM-SoundCloud
+            case "MUSIC_LOWER_VOLUME":
+                this.sendNotification("MUSIC_LOWER_VOLUME", {});
+                break;
+
+            case "MUSIC_RESTORE_VOLUME":
+                this.sendNotification("MUSIC_RESTORE_VOLUME", {});
+                break;
+
+            case "MUSIC_PLAY":
+            case "MUSIC_PAUSE":
+            case "MUSIC_NEXT":
+            case "MUSIC_PREV":
+            case "MUSIC_SET_VOLUME":
+            case "MUSIC_TOGGLE":
+                this.sendNotification(notification, payload);
+                break;
         }
     }
 });

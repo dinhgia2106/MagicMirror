@@ -1,0 +1,75 @@
+/* MMM-SoundCloud Styles */
+
+.soundcloud-player {
+    padding: 10px 0;
+}
+
+/* Hide the iframe but keep it functional */
+.sc-iframe {
+    display: none;
+}
+
+/* Player info container */
+.player-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+}
+
+/* Track info */
+.track-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.track-name {
+    font-size: 14px;
+    font-weight: 500;
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+}
+
+.artist-name {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.6);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+    margin-top: 2px;
+}
+
+/* Play status indicator */
+.play-status {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: background-color 0.3s ease;
+}
+
+.play-status.playing {
+    background-color: #1db954;
+    box-shadow: 0 0 8px rgba(29, 185, 84, 0.6);
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.play-status.paused {
+    background-color: rgba(255, 255, 255, 0.4);
+}
+
+@keyframes pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.6;
+    }
+}

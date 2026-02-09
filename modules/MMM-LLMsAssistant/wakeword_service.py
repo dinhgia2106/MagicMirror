@@ -284,6 +284,9 @@ class WakeWordService:
             self.conversation.start_conversation()
             self.emit("conversation_started")
             
+            # Lower music volume so AI can hear user better
+            self.emit("music_lower_volume")
+            
             # Quick ambient noise adjustment after wake word to ensure clear input
             try:
                 with self.microphone as source:
@@ -391,6 +394,9 @@ class WakeWordService:
             except Exception as e:
                 self.emit("error", message=str(e))
                 break
+        
+        # Restore music volume when conversation ends
+        self.emit("music_restore_volume")
         
         # Emit conversation complete
         self.emit("speech_complete")
@@ -510,6 +516,11 @@ QUY TẮC:
                     tool_args = dict(fc.args)
                     self.emit("debug", message=f"Calling {tool_name} with {tool_args}...")
                     result = self.agent_tools.execute_tool(tool_name, tool_args)
+                    
+                    # If it's a music tool, emit the action for frontend control
+                    if result.get("action") and result["action"].startswith("MUSIC_"):
+                        self.emit("music_action", action=result["action"], data=result.get("data", {}))
+                    
                     function_responses.append({
                         "name": tool_name,
                         "response": result
