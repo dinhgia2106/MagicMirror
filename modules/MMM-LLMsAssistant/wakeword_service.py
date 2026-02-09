@@ -3,6 +3,7 @@
 Wake Word Service for MMM-LLMsAssistant
 Uses Picovoice Porcupine for wake word detection
 Supports continuous conversation flow with auto-reset
+Uses VieNeu-TTS for Vietnamese text-to-speech
 """
 
 import argparse
@@ -23,6 +24,8 @@ if sys.platform == "win32":
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    # Disable VieNeu-TTS emoji warning by suppressing print
+    os.environ['PYTHONIOENCODING'] = 'utf-8'
 
 # Import agent tools
 from agent_tools import AgentTools, get_gemini_tools, TOOL_DECLARATIONS
@@ -45,6 +48,34 @@ try:
 except ImportError:
     print(json.dumps({"type": "error", "message": "Please install: pip install numpy"}))
     sys.exit(1)
+
+# VieNeu-TTS initialization (lazy loading)
+VIENEU_TTS_ENGINE = None
+VIENEU_TTS_VOICE = None
+
+def get_vieneu_tts():
+    """Lazy load VieNeu-TTS engine with voice Ly"""
+    global VIENEU_TTS_ENGINE, VIENEU_TTS_VOICE
+    if VIENEU_TTS_ENGINE is None:
+        try:
+            from vieneu import Vieneu
+            print("Initializing VieNeu-TTS...", file=sys.stderr)
+            VIENEU_TTS_ENGINE = Vieneu()
+            # Get voice "Ly" preset
+            try:
+                available_voices = VIENEU_TTS_ENGINE.list_preset_voices()
+                for desc, name in available_voices:
+                    if name.lower() == "ly":
+                        VIENEU_TTS_VOICE = VIENEU_TTS_ENGINE.get_preset_voice(name)
+                        print(f"Loaded VieNeu-TTS voice: {name}", file=sys.stderr)
+                        break
+            except Exception as e:
+                print(f"Could not load voice preset: {e}", file=sys.stderr)
+            print("VieNeu-TTS initialized successfully", file=sys.stderr)
+        except Exception as e:
+            print(f"VieNeu-TTS initialization failed: {e}", file=sys.stderr)
+            VIENEU_TTS_ENGINE = None
+    return VIENEU_TTS_ENGINE, VIENEU_TTS_VOICE
 
 
 class PvRecorderMicrophone:
@@ -307,7 +338,10 @@ class WakeWordService:
         # Centralized system prompt
         self.system_prompt = (
             "Bạn là Lens, một trợ lý cá nhân thông minh được lập trình và thực hiện bởi Gia. "
-            "Bạn có nhiệm vụ hỗ trợ Gia thực hiện các tác vụ cá nhân hàng ngày. "
+            "Bạn là trợ lý đa năng, có thể giúp đỡ nhiều việc khác nhau:\n"
+            "1. Trả lời câu hỏi kiến thức chung về khoa học, lịch sử, văn hóa, toán học, vật lý, v.v.\n"
+            "2. Sử dụng các công cụ (tools) để tra cứu thời gian, thời tiết, ngày lễ, điều khiển nhạc.\n"
+            "3. Giải đáp thắc mắc, tư vấn và hỗ trợ mọi vấn đề trong cuộc sống.\n"
             "Hãy trả lời một cách tự nhiên, ngắn gọn và hữu ích hoàn toàn bằng tiếng Việt."
         )
 
@@ -821,73 +855,108 @@ QUY TAC PHAN HOI:
             return f"Error: {str(e)}"
             
     def speak(self, text):
-        """Text-to-speech using edge-tts with true realtime streaming playback"""
-        import asyncio
-        
-        async def stream_tts_realtime():
+        """Text-to-speech using VieNeu-TTS with voice Ly"""
+        try:
+            tts_engine, voice_data = get_vieneu_tts()
+            
+            if tts_engine is None:
+                # Fallback to edge-tts if VieNeu fails
+                self._speak_edge_tts(text)
+                return
+            
+            # Generate audio with VieNeu-TTS
+            if voice_data:
+                audio = tts_engine.infer(text=text, voice=voice_data)
+            else:
+                audio = tts_engine.infer(text=text)
+            
+            # Save to temp file and play
+            temp_path = tempfile.mktemp(suffix=".wav")
+            tts_engine.save(audio, temp_path)
+            
+            # Play audio using mpv (faster) or pygame
             try:
-                import edge_tts
-                
-                # Use edge-tts streaming API
-                communicate = edge_tts.Communicate(text, self.voice_id)
-                
-                # Try to use mpv for true streaming playback
-                # mpv can read from stdin and play immediately as data arrives
+                self.current_tts_process = subprocess.Popen(
+                    ["mpv", "--no-terminal", "--no-video", temp_path],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                self.current_tts_process.wait()
+                self.current_tts_process = None
+            except FileNotFoundError:
+                # mpv not found, use pygame
                 try:
-                    self.current_tts_process = subprocess.Popen(
-                        ["mpv", "--no-terminal", "--no-video", "-"],
-                        stdin=subprocess.PIPE,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL
-                    )
-                    
-                    async for chunk in communicate.stream():
-                        if chunk["type"] == "audio":
-                            if self.current_tts_process: # Check if process still active
-                                self.current_tts_process.stdin.write(chunk["data"])
-                                self.current_tts_process.stdin.flush()
-                    
-                    if self.current_tts_process:
-                        self.current_tts_process.stdin.close()
-                        self.current_tts_process.wait()
-                        self.current_tts_process = None
-                    
-                except FileNotFoundError:
-                    # mpv not found, fallback to buffered pygame playback
                     import pygame
                     pygame.mixer.init(frequency=24000)
-                    
-                    temp_path = tempfile.mktemp(suffix=".mp3")
-                    
-                    with open(temp_path, "wb") as f:
-                        async for chunk in communicate.stream():
-                            if chunk["type"] == "audio":
-                                f.write(chunk["data"])
-                    
                     pygame.mixer.music.load(temp_path)
                     pygame.mixer.music.play()
                     while pygame.mixer.music.get_busy():
                         pygame.time.wait(50)
                     pygame.mixer.quit()
-                    
-                    try:
-                        os.unlink(temp_path)
-                    except:
-                        pass
-                    
-            except ImportError as e:
-                # Fallback to subprocess if edge_tts module not installed
-                self._speak_subprocess(text)
-            except Exception as e:
-                self.emit("error", message=f"TTS error: {str(e)}")
+                except ImportError:
+                    # Last resort: system command
+                    if sys.platform == "win32":
+                        subprocess.run(["ffplay", "-nodisp", "-autoexit", temp_path], 
+                                      capture_output=True)
+                    else:
+                        os.system(f'mpg123 -q "{temp_path}" 2>/dev/null || ffplay -nodisp -autoexit "{temp_path}" 2>/dev/null')
+            
+            # Cleanup temp file
+            try:
+                os.unlink(temp_path)
+            except:
+                pass
+                
+        except Exception as e:
+            self.emit("error", message=f"VieNeu-TTS error: {str(e)}")
+            # Fallback to edge-tts
+            self._speak_edge_tts(text)
+    
+    def _speak_edge_tts(self, text):
+        """Fallback TTS using edge-tts"""
+        import asyncio
         
-        # Run async function
+        async def stream_tts():
+            try:
+                import edge_tts
+                communicate = edge_tts.Communicate(text, self.voice_id)
+                
+                temp_path = tempfile.mktemp(suffix=".mp3")
+                with open(temp_path, "wb") as f:
+                    async for chunk in communicate.stream():
+                        if chunk["type"] == "audio":
+                            f.write(chunk["data"])
+                
+                # Play with mpv or pygame
+                try:
+                    self.current_tts_process = subprocess.Popen(
+                        ["mpv", "--no-terminal", "--no-video", temp_path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL
+                    )
+                    self.current_tts_process.wait()
+                    self.current_tts_process = None
+                except FileNotFoundError:
+                    import pygame
+                    pygame.mixer.init(frequency=24000)
+                    pygame.mixer.music.load(temp_path)
+                    pygame.mixer.music.play()
+                    while pygame.mixer.music.get_busy():
+                        pygame.time.wait(50)
+                    pygame.mixer.quit()
+                
+                try:
+                    os.unlink(temp_path)
+                except:
+                    pass
+                    
+            except Exception as e:
+                self.emit("error", message=f"Edge-TTS error: {str(e)}")
+        
         try:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            loop.run_until_complete(stream_tts_realtime())
-        except Exception as e:
-            self.emit("error", message=f"TTS async error: {str(e)}")
+            loop.run_until_complete(stream_tts())
         finally:
             try:
                 loop.close()

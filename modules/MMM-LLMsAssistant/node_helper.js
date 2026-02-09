@@ -98,7 +98,7 @@ module.exports = NodeHelper.create({
 
         // Build command with chcp for UTF-8 support on Windows
         const command = process.platform === "win32"
-            ? `chcp 65001 >nul && python "${pythonScript}" --access-key "${this.config.picovoiceAccessKey}" --ppn-path "${ppnPath}" --llm-provider ${this.config.llmProvider} --llm-api-key "${this.config.llmApiKey}" --voice-id ${this.config.voiceId}`
+            ? `chcp 65001 >nul && set PYTHONIOENCODING=utf-8 && python "${pythonScript}" --access-key "${this.config.picovoiceAccessKey}" --ppn-path "${ppnPath}" --llm-provider ${this.config.llmProvider} --llm-api-key "${this.config.llmApiKey}" --voice-id ${this.config.voiceId}`
             : `python "${pythonScript}" --access-key "${this.config.picovoiceAccessKey}" --ppn-path "${ppnPath}" --llm-provider ${this.config.llmProvider} --llm-api-key "${this.config.llmApiKey}" --voice-id ${this.config.voiceId}`;
 
         this.porcupineProcess = spawn(command, [], {
