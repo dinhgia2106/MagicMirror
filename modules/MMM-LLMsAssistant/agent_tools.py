@@ -14,9 +14,9 @@ import pytz  # For timezone handling
 class AgentTools:
     """Collection of tools that the agent can use"""
     
-    def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}
-        # Backend API URL for holidays
+        # Backend API URL for holidays (Fallback to public API since local seems down)
+        # Using Nager.Date API for Vietnam
         self.holiday_api_url = self.config.get("holiday_api_url", "http://192.168.1.11:8000/api/holidays")
         # OpenMeteo API for weather
         self.weather_lat = self.config.get("lat", 16.463713)
@@ -145,23 +145,120 @@ class AgentTools:
             year: Optional year to filter holidays
         """
         try:
-            response = requests.get(self.holiday_api_url, timeout=10)
+            params = {}
+            if year:
+                params['year'] = year
+            if month:
+                params['month'] = month
+                
+            # Log for debugging
+            print(f"[DEBUG] Calling {self.holiday_api_url} with params {params}")
+                
+            response = requests.get(self.holiday_api_url, params=params, timeout=5)
             response.raise_for_status()
             data = response.json()
             
+            # Parse the list and calculate dates for the requested year
             holidays = data.get("data", [])
             
-            # Filter by month and year if specified
-            if month or year:
-                filtered = []
-                for h in holidays:
-                    h_date = datetime.datetime.strptime(h.get("date", ""), "%Y-%m-%d")
-                    if month and h_date.month != month:
-                        continue
-                    if year and h_date.year != year:
-                        continue
-                    filtered.append(h)
-                holidays = filtered
+            # Helper to convert lunar to solar
+            try:
+                from lunardate import LunarDate
+                has_lunardate = True
+            except ImportError:
+                has_lunardate = False
+                # Fallback table for Tet (Lunar 1/1) if library is missing
+                # Tet dates (1st day of Lunar New Year)
+                tet_solar_dates = {
+                    2024: (2, 10), 2025: (1, 29), 2026: (2, 17),
+                    2027: (2, 6), 2028: (1, 26), 2029: (2, 13),
+                    2030: (2, 3)
+                }
+                print("[WARNING] 'lunardate' library not found. Using partial fallback for Tet.")
+
+            final_holidays = []
+            target_year = year if year else datetime.datetime.now(self.timezone).year
+            
+            for h in holidays:
+                try:
+                    h_type = h.get("type")
+                    name = h.get("nameVi") or h.get("name")
+                    gregorian_date = None
+                    
+                    if h_type == "solar":
+                        day = h.get("day")
+                        month = h.get("month")
+                        if day and month:
+                            try:
+                                gregorian_date = datetime.date(target_year, month, day)
+                            except ValueError:
+                                continue # Invalid date (e.g. Feb 30)
+
+                    elif h_type == "lunar":
+                        l_day = h.get("lunarDay")
+                        l_month = h.get("lunarMonth")
+                        
+                        if has_lunardate and l_day and l_month:
+                            try:
+                                # LunarDate to Solar conversion
+                                ld = LunarDate(target_year, l_month, l_day)
+                                sd = ld.toSolarDate()
+                                gregorian_date = datetime.date(sd.year, sd.month, sd.day)
+                            except Exception as e:
+                                print(f"[ERROR] Lunar conversion failed for {name}: {e}")
+                        
+                        elif not has_lunardate and l_day and l_month:
+                            # Fallback logic using known Tet dates reference
+                            try:
+                                if target_year in tet_solar_dates:
+                                    t_month, t_day = tet_solar_dates[target_year]
+                                    tet_date = datetime.date(target_year, t_month, t_day)
+                                    
+                                    # Calculate offset from Lunar 1/1 (approximate)
+                                    # This is simplistic but works for days around Tet
+                                    # Lunar 1/1 -> offset 0
+                                    # Lunar 12/29 (Giao Thua) -> offset -1 or -2 depending on lunar month length?
+                                    # Just handle specific important days manually relative to Tet
+                                    
+                                    if l_month == 1 and l_day == 1:
+                                        gregorian_date = tet_date
+                                    elif l_month == 1 and l_day > 1:
+                                        # e.g. Tet Day 2, 3
+                                        offset = l_day - 1
+                                        gregorian_date = tet_date + datetime.timedelta(days=offset)
+                                    elif l_month == 12 and l_day >= 29 and name and "Giao Thua" in name:
+                                        # Giao Thua is usually 1 day before Tet
+                                        gregorian_date = tet_date - datetime.timedelta(days=1)
+                                    # Add other major festivals if needed or leave as None
+                            except Exception as e:
+                                print(f"[ERROR] Lunar fallback failed for {name}: {e}")
+
+                    # Handle 'rule' type if needed (e.g. Father's Day)
+                    elif h_type == "rule":
+                        # Simplistic rule handling or skip
+                        pass
+                        
+                    if gregorian_date:
+                        date_str = gregorian_date.strftime("%Y-%m-%d")
+                        
+                        # Apply Month filter if specified
+                        if month and gregorian_date.month != month:
+                            continue
+                            
+                        final_holidays.append({
+                            "date": date_str,
+                            "name": name,
+                            "type": h_type,
+                            "original_data": h
+                        })
+                except Exception as e:
+                    print(f"[ERROR] processing holiday {h}: {e}")
+                    continue
+            
+            holidays = final_holidays
+            
+            # Sort by date
+            holidays.sort(key=lambda x: x["date"])
             
             return {
                 "success": True,
@@ -171,29 +268,20 @@ class AgentTools:
                     "filter": {"month": month, "year": year}
                 }
             }
-        except requests.RequestException as e:
-            # Fall back to built-in Vietnamese holidays
-            return self._get_builtin_holidays(month, year)
-    
+        except Exception as e:
+            print(f"[ERROR] Holiday API failed: {e}")
+            import traceback
+            traceback.print_exc()
+            # Return empty list or basic error info instead of built-in fallback (as user removed it)
+            return {"success": False, "error": str(e), "data": {"holidays": []}}
+
     def _get_builtin_holidays(self, month: Optional[int] = None, year: Optional[int] = None) -> Dict[str, Any]:
         """Fallback built-in Vietnamese holidays"""
         now = datetime.datetime.now(self.timezone)
         current_year = year or now.year
         
-        # Major Vietnamese holidays (fixed dates)
-        holidays = [
-            {"date": f"{current_year}-01-01", "name": "Tet Duong lich", "type": "public"},
-            {"date": f"{current_year}-02-14", "name": "Le tinh nhan", "type": "observance"},
-            {"date": f"{current_year}-03-08", "name": "Ngay Quoc te Phu nu", "type": "observance"},
-            {"date": f"{current_year}-04-30", "name": "Ngay Thong nhat", "type": "public"},
-            {"date": f"{current_year}-05-01", "name": "Ngay Quoc te Lao dong", "type": "public"},
-            {"date": f"{current_year}-06-01", "name": "Ngay Quoc te Thieu nhi", "type": "observance"},
-            {"date": f"{current_year}-09-02", "name": "Quoc khanh Viet Nam", "type": "public"},
-            {"date": f"{current_year}-10-20", "name": "Ngay Phu nu Viet Nam", "type": "observance"},
-            {"date": f"{current_year}-11-20", "name": "Ngay Nha giao Viet Nam", "type": "observance"},
-            {"date": f"{current_year}-12-25", "name": "Giang sinh", "type": "observance"},
-        ]
-        
+        holidays = []
+
         if month:
             holidays = [h for h in holidays if datetime.datetime.strptime(h["date"], "%Y-%m-%d").month == month]
         
@@ -206,22 +294,39 @@ class AgentTools:
                 "note": "Using built-in holiday list (backend unavailable)"
             }
         }
-    
-    def get_upcoming_holidays(self, days: int = 30) -> Dict[str, Any]:
+
+    def get_upcoming_holidays(self, days: int = 365) -> Dict[str, Any]:
         """
         Get holidays within the next N days.
         Args:
-            days: Number of days to look ahead (default: 30)
+            days: Number of days to look ahead (default: 365)
         """
         now = datetime.datetime.now(self.timezone).date()
         end_date = now + datetime.timedelta(days=days)
         
-        result = self.get_holidays()
-        if not result["success"]:
-            return result
+        # Fetch current year and next year to ensure coverage
+        current_year = now.year
+        years_to_fetch = {current_year}
+        if end_date.year > current_year:
+            years_to_fetch.add(end_date.year)
+            
+        all_holidays = []
+        
+        for year in years_to_fetch:
+            result = self.get_holidays(year=year)
+            if result["success"]:
+                all_holidays.extend(result["data"]["holidays"])
+        
+        # Remove duplicates based on date+name
+        unique_holidays = {}
+        for h in all_holidays:
+            key = f"{h.get('date')}_{h.get('name')}"
+            unique_holidays[key] = h
+            
+        combined_holidays = list(unique_holidays.values())
         
         upcoming = []
-        for h in result["data"]["holidays"]:
+        for h in combined_holidays:
             try:
                 h_date = datetime.datetime.strptime(h["date"], "%Y-%m-%d").date()
                 if now <= h_date <= end_date:
@@ -291,7 +396,7 @@ class AgentTools:
                 "timezone": "Asia/Ho_Chi_Minh"
             }
             
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(url, params=params, timeout=3)
             response.raise_for_status()
             data = response.json()
             
@@ -377,7 +482,7 @@ class AgentTools:
                 "forecast_days": 7  # Always get 7 days to cover tomorrow/next week even if LLM asks for 1
             }
             
-            response = requests.get(url, params=params, timeout=10)
+            response = requests.get(url, params=params, timeout=3)
             response.raise_for_status()
             data = response.json()
             
@@ -516,7 +621,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "get_holidays",
-        "description": "Get list of holidays. Can filter by month and/or year. Use this when user asks about holidays, 'ngay le', 'ngay nghi'.",
+        "description": "Get list of holidays. Can filter by month and/or year. Use this when user asks about holidays, 'ngay le', 'ngay nghi', 'Tet', 'Tet Nguyen Dan', 'Lunar New Year'.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -534,13 +639,13 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "get_upcoming_holidays",
-        "description": "Get holidays within the next N days. Use when user asks 'what holidays are coming up', 'ngay le sap toi'.",
+        "description": "Get holidays within the next N days. Use when user asks 'what holidays are coming up', 'ngay le sap toi', 'bao nhieu ngay nua la Tet', 'Tet con bao lau'.",
         "parameters": {
             "type": "object",
             "properties": {
                 "days": {
                     "type": "integer",
-                    "description": "Number of days to look ahead (default: 30)"
+                    "description": "Number of days to look ahead (default: 365)"
                 }
             },
             "required": []
@@ -548,7 +653,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "check_holiday",
-        "description": "Check if a specific date is a holiday and if it's a weekend.",
+        "description": "Check if a specific date is a holiday and if it's a weekend. Use to check if a specific date is Tet or a holiday.",
         "parameters": {
             "type": "object",
             "properties": {

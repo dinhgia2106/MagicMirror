@@ -8,3 +8,4 @@ pyaudio>=0.2.14
 pygame
 pytz>=2024.1
 requests>=2.31.0
+lunardate

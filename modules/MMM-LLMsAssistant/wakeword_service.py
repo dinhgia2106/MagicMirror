@@ -216,6 +216,7 @@ class WakeWordService:
         
     def start(self):
         """Start wake word detection"""
+        self.emit("debug", message="Wake Word Service v2.0 (Streaming TTS) Started")
         try:
             # Initialize Porcupine
             self.porcupine = pvporcupine.create(
@@ -483,7 +484,6 @@ QUY TẮC:
                     
                     # Split into sentences for shorter TTS latency
                     # Check for punctuation marks: . ? ! ; sent_end
-                    import re
                     # Split by sentence endings, keeping the ending
                     parts = re.split(r'([.?!;]+)', sentence_buffer)
                     
