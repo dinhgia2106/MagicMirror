@@ -45,12 +45,43 @@ module.exports = NodeHelper.create({
         const pythonScript = path.join(__dirname, "wakeword_service.py");
         const ppnDir = path.join(__dirname, "Picovoice_ppn");
 
-        // Auto-detect .ppn file
+        // Auto-detect .ppn file based on platform
         let ppnPath = null;
         try {
             const files = fs.readdirSync(ppnDir);
-            const ppnFile = files.find(f => f.endsWith(".ppn"));
-            if (ppnFile) {
+            const ppnFiles = files.filter(f => f.endsWith(".ppn"));
+
+            if (ppnFiles.length > 0) {
+                // Determine platform keyword to look for
+                let platformKeyword;
+                if (process.platform === "win32") {
+                    platformKeyword = "windows";
+                } else if (process.platform === "linux") {
+                    // Raspberry Pi and other Linux ARM devices
+                    platformKeyword = "raspberry-pi";
+                } else if (process.platform === "darwin") {
+                    platformKeyword = "mac";
+                } else {
+                    platformKeyword = "linux";
+                }
+
+                // Try to find platform-specific .ppn file
+                let ppnFile = ppnFiles.find(f => f.toLowerCase().includes(platformKeyword));
+
+                // If not found, try generic linux for non-windows platforms
+                if (!ppnFile && process.platform !== "win32") {
+                    ppnFile = ppnFiles.find(f => f.toLowerCase().includes("linux"));
+                }
+
+                // Fallback to first available .ppn file
+                if (!ppnFile) {
+                    ppnFile = ppnFiles[0];
+                    console.warn(`[MMM-LLMsAssistant] No platform-specific .ppn file found for ${process.platform}. Using: ${ppnFile}`);
+                    console.warn(`[MMM-LLMsAssistant] Expected file containing: "${platformKeyword}". Available: ${ppnFiles.join(", ")}`);
+                } else {
+                    console.log(`[MMM-LLMsAssistant] Using platform-specific .ppn file: ${ppnFile}`);
+                }
+
                 ppnPath = path.join(ppnDir, ppnFile);
             }
         } catch (e) {
