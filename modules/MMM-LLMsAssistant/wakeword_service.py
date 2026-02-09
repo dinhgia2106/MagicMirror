@@ -632,11 +632,10 @@ QUY TAC PHAN HOI:
             )
             
             full_text = ""
-            sentence_buffer = ""
             function_calls = []
             music_tool_called = False
             
-            # Stream the response
+            # Stream the response - collect all text first
             for chunk in chat.send_message_stream(text):
                 # Check for function calls
                 if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
@@ -648,23 +647,9 @@ QUY TAC PHAN HOI:
                 if function_calls:
                     continue
                 
-                # Process text content
+                # Collect text content
                 if chunk.text:
-                    token = chunk.text
-                    full_text += token
-                    sentence_buffer += token
-                    
-                    # Split into sentences for shorter TTS latency
-                    parts = re.split(r'([.?!;]+)', sentence_buffer)
-                    
-                    if len(parts) > 1:
-                        for i in range(0, len(parts) - 1, 2):
-                            sentence = parts[i] + parts[i+1]
-                            clean_sent = self.clean_text_for_tts(sentence)
-                            if clean_sent:
-                                self.tts_queue.put(clean_sent)
-                                self.emit("llm_response", text=clean_sent + " ")
-                        sentence_buffer = parts[-1]
+                    full_text += chunk.text
             
             # If there were function calls, execute them and get the final answer
             if function_calls:
@@ -690,33 +675,20 @@ QUY TAC PHAN HOI:
                         )
                     )
                 
-                # Reset buffers for final response
+                # Reset and get final response
                 full_text = ""
-                sentence_buffer = ""
                 
-                # Send tool results back to Gemini (Streaming again)
+                # Send tool results back to Gemini - collect all
                 for chunk in chat.send_message_stream(function_responses):
                     if chunk.text:
-                        token = chunk.text
-                        full_text += token
-                        sentence_buffer += token
-                        
-                        parts = re.split(r'([.?!;]+)', sentence_buffer)
-                        if len(parts) > 1:
-                            for i in range(0, len(parts) - 1, 2):
-                                sentence = parts[i] + parts[i+1]
-                                clean_sent = self.clean_text_for_tts(sentence)
-                                if clean_sent:
-                                    self.tts_queue.put(clean_sent)
-                                    self.emit("llm_response", text=clean_sent + " ")
-                            sentence_buffer = parts[-1]
+                        full_text += chunk.text
             
-            # Process any remaining text in buffer
-            if sentence_buffer:
-                clean_sent = self.clean_text_for_tts(sentence_buffer)
-                if clean_sent:
-                    self.tts_queue.put(clean_sent)
-                    self.emit("llm_response", text=clean_sent)
+            # Clean and send to TTS once
+            if full_text:
+                clean_text = self.clean_text_for_tts(full_text)
+                if clean_text:
+                    self.emit("llm_response", text=clean_text)
+                    self.tts_queue.put(clean_text)
             
             return full_text, music_tool_called
 
