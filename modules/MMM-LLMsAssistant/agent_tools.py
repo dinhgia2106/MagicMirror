@@ -10,6 +10,17 @@ import requests
 from typing import Optional, Dict, Any, List
 import pytz  # For timezone handling
 
+# Import lunar calendar for Vietnamese lunar date conversion
+try:
+    from lunar_calendar import (
+        solar_to_lunar, lunar_to_solar, 
+        get_lunar_month_name, get_year_can_chi, get_day_can_chi,
+        check_lunar_holiday, LUNAR_HOLIDAYS
+    )
+    LUNAR_AVAILABLE = True
+except ImportError:
+    LUNAR_AVAILABLE = False
+
 
 class AgentTools:
     """Collection of tools that the agent can use"""
@@ -68,9 +79,14 @@ class AgentTools:
     
     def get_date_info(self, date_str: Optional[str] = None) -> Dict[str, Any]:
         """
-        Get detailed information about a specific date.
+        Get detailed information about a specific date including LUNAR CALENDAR info.
+        This is the PRIMARY tool for answering questions about dates.
+        
         Args:
-            date_str: Date string in format "YYYY-MM-DD" or natural language like "tomorrow", "next week"
+            date_str: Date string in format "YYYY-MM-DD" or natural language like "tomorrow", "ngay mai"
+        
+        Returns:
+            Solar date info, lunar date info, and any holidays (both solar and lunar)
         """
         now = datetime.datetime.now(self.timezone)
         
@@ -93,21 +109,69 @@ class AgentTools:
         day_names_vi = ["Thu Hai", "Thu Ba", "Thu Tu", "Thu Nam", "Thu Sau", "Thu Bay", "Chu Nhat"]
         weekday = target_date.weekday()
         
-        return {
+        result = {
             "success": True,
             "data": {
-                "date": target_date.strftime("%Y-%m-%d"),
-                "day": target_date.day,
-                "month": target_date.month,
-                "year": target_date.year,
-                "day_of_week": target_date.strftime("%A"),
-                "day_of_week_vi": day_names_vi[weekday],
-                "is_weekend": weekday >= 5,
+                "solar": {
+                    "date": target_date.strftime("%Y-%m-%d"),
+                    "day": target_date.day,
+                    "month": target_date.month,
+                    "year": target_date.year,
+                    "day_of_week": target_date.strftime("%A"),
+                    "day_of_week_vi": day_names_vi[weekday],
+                    "is_weekend": weekday >= 5,
+                },
                 "days_from_today": days_diff,
                 "relative": "today" if days_diff == 0 else ("in the past" if days_diff < 0 else "in the future"),
-                "formatted_vi": f"{day_names_vi[weekday]}, ngay {target_date.day} thang {target_date.month} nam {target_date.year}"
+                "formatted_vi": f"{day_names_vi[weekday]}, ngay {target_date.day} thang {target_date.month} nam {target_date.year}",
+                "holidays": []
             }
         }
+        
+        # Add lunar calendar info if available
+        if LUNAR_AVAILABLE:
+            lunar = solar_to_lunar(target_date.day, target_date.month, target_date.year)
+            lunar_month_name = get_lunar_month_name(lunar['month'], lunar['leap'])
+            
+            result["data"]["lunar"] = {
+                "day": lunar['day'],
+                "month": lunar['month'],
+                "year": lunar['year'],
+                "leap": lunar['leap'],
+                "month_name": lunar_month_name,
+                "can_chi_year": get_year_can_chi(lunar['year']),
+                "can_chi_day": get_day_can_chi(lunar['jd']),
+                "formatted_vi": f"Ngay {lunar['day']} {lunar_month_name} nam {get_year_can_chi(lunar['year'])}"
+            }
+            
+            # Check for lunar holidays
+            lunar_holiday = check_lunar_holiday(lunar['day'], lunar['month'])
+            if lunar_holiday:
+                result["data"]["holidays"].append({
+                    "name": lunar_holiday['name'],
+                    "nameVi": lunar_holiday['nameVi'],
+                    "type": "lunar",
+                    "lunar_date": f"{lunar['day']}/{lunar['month']}"
+                })
+        
+        # Check for solar holidays from API (don't use check_holiday to avoid duplicating lunar holidays)
+        try:
+            api_result = self.get_holidays(month=target_date.month, year=target_date.year)
+            if api_result.get("success"):
+                date_str = target_date.strftime("%Y-%m-%d")
+                for h in api_result["data"].get("holidays", []):
+                    if h.get("date") == date_str:
+                        # Avoid duplicating lunar holidays (already added above)
+                        if h.get("type") != "lunar":
+                            result["data"]["holidays"].append({
+                                "name": h.get("name"),
+                                "nameVi": h.get("nameVi", h.get("name")),
+                                "type": h.get("type", "solar")
+                            })
+        except Exception:
+            pass  # API unavailable, lunar holidays already checked
+        
+        return result
     
     def calculate_date_difference(self, date1: str, date2: str) -> Dict[str, Any]:
         """
@@ -155,12 +219,19 @@ class AgentTools:
             if month or year:
                 filtered = []
                 for h in holidays:
-                    h_date = datetime.datetime.strptime(h.get("date", ""), "%Y-%m-%d")
-                    if month and h_date.month != month:
+                    date_str = h.get("date", "")
+                    if not date_str:
+                        # Skip holidays without date (lunar holidays are handled separately)
                         continue
-                    if year and h_date.year != year:
+                    try:
+                        h_date = datetime.datetime.strptime(date_str, "%Y-%m-%d")
+                        if month and h_date.month != month:
+                            continue
+                        if year and h_date.year != year:
+                            continue
+                        filtered.append(h)
+                    except ValueError:
                         continue
-                    filtered.append(h)
                 holidays = filtered
             
             return {
@@ -246,20 +317,41 @@ class AgentTools:
     
     def check_holiday(self, date_str: str) -> Dict[str, Any]:
         """
-        Check if a specific date is a holiday.
+        Check if a specific date is a holiday (both solar AND lunar holidays).
+        This checks:
+        1. Solar holidays from the backend API
+        2. Lunar holidays by converting to lunar date and checking
+        
         Args:
-            date_str: Date in YYYY-MM-DD format
+            date_str: Date in YYYY-MM-DD format (solar/Gregorian date)
         """
         try:
             check_date = datetime.datetime.strptime(date_str, "%Y-%m-%d").date()
         except ValueError:
             return {"success": False, "error": f"Invalid date format: {date_str}"}
         
-        result = self.get_holidays(month=check_date.month, year=check_date.year)
-        if not result["success"]:
-            return result
+        matching_holidays = []
         
-        matching_holidays = [h for h in result["data"]["holidays"] if h.get("date") == date_str]
+        # Check lunar holidays first if available
+        if LUNAR_AVAILABLE:
+            lunar = solar_to_lunar(check_date.day, check_date.month, check_date.year)
+            lunar_holiday = check_lunar_holiday(lunar['day'], lunar['month'])
+            if lunar_holiday:
+                matching_holidays.append({
+                    "name": lunar_holiday['name'],
+                    "nameVi": lunar_holiday['nameVi'],
+                    "type": "lunar",
+                    "lunar_day": lunar['day'],
+                    "lunar_month": lunar['month'],
+                    "date": date_str
+                })
+        
+        # Check solar holidays from API
+        result = self.get_holidays(month=check_date.month, year=check_date.year)
+        if result["success"]:
+            for h in result["data"]["holidays"]:
+                if h.get("date") == date_str:
+                    matching_holidays.append(h)
         
         return {
             "success": True,
@@ -593,13 +685,13 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "get_date_info",
-        "description": "Get detailed information about a specific date including day of week, whether it's weekend, and how many days from today. Supports natural language like 'tomorrow', 'yesterday', 'ngay mai', 'hom qua'.",
+        "description": "IMPORTANT: This is the PRIMARY tool for answering 'what day is it', 'ngay mai ngay gi', 'hom nay ngay am gi'. Returns BOTH solar (Gregorian) and LUNAR (am lich) calendar info plus any holidays. Use for: tomorrow, yesterday, ngay mai, hom qua, ngay am, lich am, Tet, Ong Cong Ong Tao, Ram, etc. Returns lunar date (ngay am), Can Chi, and matching lunar holidays like Tet, Vu Lan, Trung Thu, Ong Cong Ong Tao.",
         "parameters": {
             "type": "object",
             "properties": {
                 "date_str": {
                     "type": "string",
-                    "description": "Date in YYYY-MM-DD format or natural language like 'today', 'tomorrow', 'yesterday', 'ngay mai', 'hom qua'"
+                    "description": "Date in YYYY-MM-DD format or natural language: 'today', 'tomorrow', 'yesterday', 'ngay mai', 'hom qua', 'hom nay'"
                 }
             },
             "required": []
@@ -625,7 +717,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "get_holidays",
-        "description": "Get list of holidays. Can filter by month and/or year. Use this when user asks about holidays, 'ngay le', 'ngay nghi'.",
+        "description": "Get list of holidays from database. Use get_date_info instead if you need to check holidays for a specific date (it includes lunar holidays). This is for listing all holidays in a month/year.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -643,7 +735,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "get_upcoming_holidays",
-        "description": "Get holidays within the next N days. Use when user asks 'what holidays are coming up', 'ngay le sap toi'.",
+        "description": "Get holidays within the next N days. For checking a specific date, use get_date_info instead.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -657,7 +749,7 @@ TOOL_DECLARATIONS = [
     },
     {
         "name": "check_holiday",
-        "description": "Check if a specific date is a holiday and if it's a weekend.",
+        "description": "Check if a specific date is a holiday (checks BOTH solar and lunar holidays). Requires date in YYYY-MM-DD format. For natural language dates like 'tomorrow', use get_date_info instead.",
         "parameters": {
             "type": "object",
             "properties": {
