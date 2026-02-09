@@ -40,6 +40,16 @@
     background: rgba(255, 255, 255, 0.1);
     border-radius: 2px;
     margin-bottom: 6px;
+    cursor: pointer;
+    transition: height 0.15s ease;
+}
+
+.progress-container:hover {
+    height: 8px;
+}
+
+.progress-container.seeking {
+    height: 8px;
 }
 
 /* Progress bar fill */
@@ -47,7 +57,11 @@
     height: 100%;
     background: rgba(255, 85, 0, 0.8);
     border-radius: 2px;
-    transition: width 0.2s linear;
+    transition: width 0.1s linear;
+}
+
+.progress-container.seeking .progress-bar {
+    transition: none;
 }
 
 /* Time display row */

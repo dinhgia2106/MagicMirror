@@ -71,6 +71,7 @@ Module.register("MMM-SoundCloud", {
         // Progress bar
         const progressContainer = document.createElement("div");
         progressContainer.className = "progress-container";
+        progressContainer.id = "progress-container";
 
         const progressBar = document.createElement("div");
         progressBar.className = "progress-bar";
@@ -79,6 +80,7 @@ Module.register("MMM-SoundCloud", {
         progressBar.style.width = progress + "%";
         progressContainer.appendChild(progressBar);
 
+        this.setupSeekGesture(progressContainer);
         playerUI.appendChild(progressContainer);
 
         // Time display
@@ -273,9 +275,15 @@ Module.register("MMM-SoundCloud", {
         });
 
         this.widget.bind(SC.Widget.Events.FINISH, () => {
-            // Track finished, next will auto-play in playlist
-            this.isPaused = true;
-            this.updatePlayStatus();
+            // Track finished
+            if (this.isShuffled) {
+                // In shuffle mode, play a random track
+                this.playRandomTrack();
+            } else {
+                // Normal mode - SoundCloud handles next track automatically
+                this.isPaused = true;
+                this.updatePlayStatus();
+            }
         });
     },
 
@@ -359,6 +367,58 @@ Module.register("MMM-SoundCloud", {
         if (this.widget && this.widgetReady) {
             this.widget.prev();
         }
+    },
+
+    seekTo: function (position) {
+        if (this.widget && this.widgetReady && this.duration > 0) {
+            const seekPosition = Math.max(0, Math.min(this.duration, position));
+            this.widget.seekTo(seekPosition);
+        }
+    },
+
+    setupSeekGesture: function (progressContainer) {
+        let isDragging = false;
+
+        const updateSeekFromPosition = (clientX) => {
+            const rect = progressContainer.getBoundingClientRect();
+            const x = clientX - rect.left;
+            const percentage = Math.max(0, Math.min(1, x / rect.width));
+            const seekPosition = percentage * this.duration;
+            this.seekTo(seekPosition);
+        };
+
+        const onStart = (e) => {
+            if (this.duration <= 0) return;
+            isDragging = true;
+            progressContainer.classList.add("seeking");
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            updateSeekFromPosition(clientX);
+            e.preventDefault();
+        };
+
+        const onMove = (e) => {
+            if (!isDragging) return;
+            const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+            updateSeekFromPosition(clientX);
+            e.preventDefault();
+        };
+
+        const onEnd = () => {
+            if (!isDragging) return;
+            isDragging = false;
+            progressContainer.classList.remove("seeking");
+        };
+
+        // Touch events
+        progressContainer.addEventListener("touchstart", onStart, { passive: false });
+        document.addEventListener("touchmove", onMove, { passive: false });
+        document.addEventListener("touchend", onEnd);
+        document.addEventListener("touchcancel", onEnd);
+
+        // Mouse events
+        progressContainer.addEventListener("mousedown", onStart);
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onEnd);
     },
 
     setVolume: function (level) {
@@ -468,6 +528,26 @@ Module.register("MMM-SoundCloud", {
         });
 
         this.sendNotification("MUSIC_SHUFFLE_CHANGED", { isShuffled: this.isShuffled });
+    },
+
+    playRandomTrack: function () {
+        if (!this.widget || !this.widgetReady) return;
+
+        this.widget.getSounds((sounds) => {
+            if (!sounds || sounds.length === 0) return;
+
+            // Get current track index
+            this.widget.getCurrentSoundIndex((currentIndex) => {
+                // Pick a random index different from current
+                let randomIndex;
+                do {
+                    randomIndex = Math.floor(Math.random() * sounds.length);
+                } while (randomIndex === currentIndex && sounds.length > 1);
+
+                this.widget.skip(randomIndex);
+                Log.info("MMM-SoundCloud: Shuffle - playing track " + randomIndex);
+            });
+        });
     },
 
     lowerVolume: function () {
