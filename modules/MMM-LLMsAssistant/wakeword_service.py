@@ -3,7 +3,7 @@
 Wake Word Service for MMM-LLMsAssistant
 Uses Picovoice Porcupine for wake word detection
 Supports continuous conversation flow with auto-reset
-Uses VieNeu-TTS for Vietnamese text-to-speech
+Uses edge-tts for Vietnamese text-to-speech (cross-platform compatible)
 """
 
 import argparse
@@ -49,33 +49,9 @@ except ImportError:
     print(json.dumps({"type": "error", "message": "Please install: pip install numpy"}))
     sys.exit(1)
 
-# VieNeu-TTS initialization (lazy loading)
-VIENEU_TTS_ENGINE = None
-VIENEU_TTS_VOICE = None
-
-def get_vieneu_tts():
-    """Lazy load VieNeu-TTS engine with voice Ly"""
-    global VIENEU_TTS_ENGINE, VIENEU_TTS_VOICE
-    if VIENEU_TTS_ENGINE is None:
-        try:
-            from vieneu import Vieneu
-            print("Initializing VieNeu-TTS...", file=sys.stderr)
-            VIENEU_TTS_ENGINE = Vieneu()
-            # Get voice "Ly" preset
-            try:
-                available_voices = VIENEU_TTS_ENGINE.list_preset_voices()
-                for desc, name in available_voices:
-                    if name.lower() == "ly":
-                        VIENEU_TTS_VOICE = VIENEU_TTS_ENGINE.get_preset_voice(name)
-                        print(f"Loaded VieNeu-TTS voice: {name}", file=sys.stderr)
-                        break
-            except Exception as e:
-                print(f"Could not load voice preset: {e}", file=sys.stderr)
-            print("VieNeu-TTS initialized successfully", file=sys.stderr)
-        except Exception as e:
-            print(f"VieNeu-TTS initialization failed: {e}", file=sys.stderr)
-            VIENEU_TTS_ENGINE = None
-    return VIENEU_TTS_ENGINE, VIENEU_TTS_VOICE
+# Edge-TTS is used for Vietnamese text-to-speech
+# It works cross-platform (Windows, Linux ARM, etc.) via Microsoft Azure API
+# No local ML models needed, avoiding "Illegal instruction" errors on Pi
 
 
 class PvRecorderMicrophone:
@@ -855,65 +831,7 @@ QUY TAC PHAN HOI:
             return f"Error: {str(e)}"
             
     def speak(self, text):
-        """Text-to-speech using VieNeu-TTS with voice Ly"""
-        try:
-            tts_engine, voice_data = get_vieneu_tts()
-            
-            if tts_engine is None:
-                # Fallback to edge-tts if VieNeu fails
-                self._speak_edge_tts(text)
-                return
-            
-            # Generate audio with VieNeu-TTS
-            if voice_data:
-                audio = tts_engine.infer(text=text, voice=voice_data)
-            else:
-                audio = tts_engine.infer(text=text)
-            
-            # Save to temp file and play
-            temp_path = tempfile.mktemp(suffix=".wav")
-            tts_engine.save(audio, temp_path)
-            
-            # Play audio using mpv (faster) or pygame
-            try:
-                self.current_tts_process = subprocess.Popen(
-                    ["mpv", "--no-terminal", "--no-video", temp_path],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                self.current_tts_process.wait()
-                self.current_tts_process = None
-            except FileNotFoundError:
-                # mpv not found, use pygame
-                try:
-                    import pygame
-                    pygame.mixer.init(frequency=24000)
-                    pygame.mixer.music.load(temp_path)
-                    pygame.mixer.music.play()
-                    while pygame.mixer.music.get_busy():
-                        pygame.time.wait(50)
-                    pygame.mixer.quit()
-                except ImportError:
-                    # Last resort: system command
-                    if sys.platform == "win32":
-                        subprocess.run(["ffplay", "-nodisp", "-autoexit", temp_path], 
-                                      capture_output=True)
-                    else:
-                        os.system(f'mpg123 -q "{temp_path}" 2>/dev/null || ffplay -nodisp -autoexit "{temp_path}" 2>/dev/null')
-            
-            # Cleanup temp file
-            try:
-                os.unlink(temp_path)
-            except:
-                pass
-                
-        except Exception as e:
-            self.emit("error", message=f"VieNeu-TTS error: {str(e)}")
-            # Fallback to edge-tts
-            self._speak_edge_tts(text)
-    
-    def _speak_edge_tts(self, text):
-        """Fallback TTS using edge-tts"""
+        """Text-to-speech using edge-tts (cross-platform compatible)"""
         import asyncio
         
         async def stream_tts():
@@ -937,13 +855,20 @@ QUY TAC PHAN HOI:
                     self.current_tts_process.wait()
                     self.current_tts_process = None
                 except FileNotFoundError:
-                    import pygame
-                    pygame.mixer.init(frequency=24000)
-                    pygame.mixer.music.load(temp_path)
-                    pygame.mixer.music.play()
-                    while pygame.mixer.music.get_busy():
-                        pygame.time.wait(50)
-                    pygame.mixer.quit()
+                    try:
+                        import pygame
+                        pygame.mixer.init(frequency=24000)
+                        pygame.mixer.music.load(temp_path)
+                        pygame.mixer.music.play()
+                        while pygame.mixer.music.get_busy():
+                            pygame.time.wait(50)
+                        pygame.mixer.quit()
+                    except ImportError:
+                        if sys.platform == "win32":
+                            subprocess.run(["ffplay", "-nodisp", "-autoexit", temp_path],
+                                          capture_output=True)
+                        else:
+                            os.system(f'mpg123 -q "{temp_path}" 2>/dev/null || ffplay -nodisp -autoexit "{temp_path}" 2>/dev/null')
                 
                 try:
                     os.unlink(temp_path)
@@ -962,42 +887,6 @@ QUY TAC PHAN HOI:
                 loop.close()
             except:
                 pass
-    
-    def _speak_subprocess(self, text):
-        """Fallback TTS using subprocess"""
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-                temp_path = f.name
-                
-            # Generate speech with edge-tts CLI
-            subprocess.run([
-                "edge-tts",
-                "--voice", self.voice_id,
-                "--text", text,
-                "--write-media", temp_path
-            ], check=True, capture_output=True)
-            
-            # Play audio using pygame
-            try:
-                import pygame
-                pygame.mixer.init()
-                pygame.mixer.music.load(temp_path)
-                pygame.mixer.music.play()
-                while pygame.mixer.music.get_busy():
-                    pygame.time.wait(100)
-                pygame.mixer.quit()
-            except ImportError:
-                if sys.platform == "win32":
-                    subprocess.run(["ffplay", "-nodisp", "-autoexit", temp_path], 
-                                  capture_output=True)
-                elif sys.platform == "darwin":
-                    os.system(f'afplay "{temp_path}"')
-                else:
-                    os.system(f'mpg123 -q "{temp_path}" 2>/dev/null || ffplay -nodisp -autoexit "{temp_path}" 2>/dev/null')
-                
-            os.unlink(temp_path)
-        except Exception as e:
-            self.emit("error", message=f"TTS subprocess error: {str(e)}")
             
     def cleanup(self):
         """Cleanup resources"""
