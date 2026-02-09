@@ -131,6 +131,16 @@ class WakeWordService:
         self.recorder = None
         self.recognizer = sr.Recognizer()
         self.microphone = sr.Microphone()
+        
+        # Speech recognition tuning to prevent early cutoff
+        # pause_threshold: seconds of silence before considering speech done (default 0.8)
+        self.recognizer.pause_threshold = 1.5  # Give user more time to pause between phrases
+        # phrase_threshold: minimum seconds of speaking before considering it a phrase (default 0.3)
+        self.recognizer.phrase_threshold = 0.3
+        # non_speaking_duration: seconds of non-speaking audio to keep before/after phrase (default 0.5)
+        self.recognizer.non_speaking_duration = 0.5
+        # dynamic_energy_threshold: auto-adjust for ambient noise
+        self.recognizer.dynamic_energy_threshold = True
         self.conversation = ConversationManager()
         
         # TTS Queue and Worker
