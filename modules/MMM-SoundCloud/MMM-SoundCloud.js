@@ -25,6 +25,8 @@ Module.register("MMM-SoundCloud", {
         this.widgetReady = false;
         this.currentPosition = 0;
         this.duration = 0;
+        this.isShuffled = false;
+        this.originalOrder = [];
     },
 
     getDom: function () {
@@ -99,6 +101,49 @@ Module.register("MMM-SoundCloud", {
         const controlsRow = document.createElement("div");
         controlsRow.className = "controls-row";
 
+        // Volume control (left side)
+        const volumeWrapper = document.createElement("div");
+        volumeWrapper.className = "volume-wrapper";
+
+        const volumeControl = document.createElement("div");
+        volumeControl.className = "volume-control";
+        volumeControl.id = "volume-control";
+        volumeControl.textContent = this.volume + "%";
+        volumeControl.title = "Tap to adjust volume";
+        volumeWrapper.appendChild(volumeControl);
+
+        // Volume popup slider
+        const volumePopup = document.createElement("div");
+        volumePopup.className = "volume-popup";
+        volumePopup.id = "volume-popup";
+
+        const volumeSliderTrack = document.createElement("div");
+        volumeSliderTrack.className = "volume-slider-track";
+
+        const volumeSliderFill = document.createElement("div");
+        volumeSliderFill.className = "volume-slider-fill";
+        volumeSliderFill.id = "volume-slider-fill";
+        volumeSliderFill.style.height = this.volume + "%";
+        volumeSliderTrack.appendChild(volumeSliderFill);
+
+        const volumeSliderThumb = document.createElement("div");
+        volumeSliderThumb.className = "volume-slider-thumb";
+        volumeSliderThumb.id = "volume-slider-thumb";
+        volumeSliderThumb.style.bottom = this.volume + "%";
+        volumeSliderTrack.appendChild(volumeSliderThumb);
+
+        volumePopup.appendChild(volumeSliderTrack);
+
+        const volumeValue = document.createElement("div");
+        volumeValue.className = "volume-popup-value";
+        volumeValue.id = "volume-popup-value";
+        volumeValue.textContent = Math.round(this.volume) + "%";
+        volumePopup.appendChild(volumeValue);
+
+        volumeWrapper.appendChild(volumePopup);
+        this.setupVolumePopup(volumeControl, volumePopup, volumeSliderTrack);
+        controlsRow.appendChild(volumeWrapper);
+
         const prevBtn = document.createElement("button");
         prevBtn.className = "control-btn";
         prevBtn.innerHTML = "&#9664;&#9664;";
@@ -117,6 +162,15 @@ Module.register("MMM-SoundCloud", {
         nextBtn.innerHTML = "&#9654;&#9654;";
         nextBtn.onclick = () => this.next();
         controlsRow.appendChild(nextBtn);
+
+        // Shuffle button (right side)
+        const shuffleBtn = document.createElement("button");
+        shuffleBtn.className = "control-btn shuffle-btn" + (this.isShuffled ? " active" : "");
+        shuffleBtn.id = "shuffle-btn";
+        shuffleBtn.innerHTML = "&#8645;"; // Up-down arrows for shuffle
+        shuffleBtn.title = "Shuffle";
+        shuffleBtn.onclick = () => this.toggleShuffle();
+        controlsRow.appendChild(shuffleBtn);
 
         playerUI.appendChild(controlsRow);
 
@@ -312,7 +366,108 @@ Module.register("MMM-SoundCloud", {
             level = Math.max(0, Math.min(100, level));
             this.volume = level;
             this.widget.setVolume(level);
+            this.updateVolumeDisplay();
         }
+    },
+
+    updateVolumeDisplay: function () {
+        const volumeEl = document.getElementById("volume-control");
+        const volumeFill = document.getElementById("volume-slider-fill");
+        const volumeThumb = document.getElementById("volume-slider-thumb");
+        const volumePopupValue = document.getElementById("volume-popup-value");
+        const vol = Math.round(this.volume);
+
+        if (volumeEl) volumeEl.textContent = vol + "%";
+        if (volumeFill) volumeFill.style.height = vol + "%";
+        if (volumeThumb) volumeThumb.style.bottom = vol + "%";
+        if (volumePopupValue) volumePopupValue.textContent = vol + "%";
+    },
+
+    setupVolumePopup: function (trigger, popup, sliderTrack) {
+        let isDragging = false;
+        let startY = 0;
+        let startVolume = 0;
+
+        const showPopup = () => {
+            popup.classList.add("visible");
+        };
+
+        const hidePopup = () => {
+            popup.classList.remove("visible");
+        };
+
+        const onStart = (e) => {
+            isDragging = true;
+            startY = e.touches ? e.touches[0].clientY : e.clientY;
+            startVolume = this.volume;
+            showPopup();
+            trigger.classList.add("dragging");
+            e.preventDefault();
+        };
+
+        const onMove = (e) => {
+            if (!isDragging) return;
+            const currentY = e.touches ? e.touches[0].clientY : e.clientY;
+            const deltaY = startY - currentY; // Up = positive = increase volume
+            const volumeChange = deltaY * 0.5; // 0.5% per pixel
+            const newVolume = Math.max(0, Math.min(100, startVolume + volumeChange));
+            this.setVolume(newVolume);
+            e.preventDefault();
+        };
+
+        const onEnd = () => {
+            if (!isDragging) return;
+            isDragging = false;
+            hidePopup();
+            trigger.classList.remove("dragging");
+        };
+
+        // Touch events on trigger
+        trigger.addEventListener("touchstart", onStart, { passive: false });
+        document.addEventListener("touchmove", onMove, { passive: false });
+        document.addEventListener("touchend", onEnd);
+        document.addEventListener("touchcancel", onEnd);
+
+        // Mouse events on trigger
+        trigger.addEventListener("mousedown", onStart);
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onEnd);
+    },
+
+
+    toggleShuffle: function () {
+        if (!this.widget || !this.widgetReady) return;
+
+        this.isShuffled = !this.isShuffled;
+
+        // Update shuffle button appearance
+        const shuffleBtn = document.getElementById("shuffle-btn");
+        if (shuffleBtn) {
+            if (this.isShuffled) {
+                shuffleBtn.classList.add("active");
+            } else {
+                shuffleBtn.classList.remove("active");
+            }
+        }
+
+        // Get all sounds and shuffle
+        this.widget.getSounds((sounds) => {
+            if (!sounds || sounds.length === 0) return;
+
+            if (this.isShuffled) {
+                // Store original order
+                this.originalOrder = sounds.map((s, i) => i);
+
+                // Pick a random track to play
+                const randomIndex = Math.floor(Math.random() * sounds.length);
+                this.widget.skip(randomIndex);
+                Log.info("MMM-SoundCloud: Shuffle ON - playing random track");
+            } else {
+                Log.info("MMM-SoundCloud: Shuffle OFF");
+            }
+        });
+
+        this.sendNotification("MUSIC_SHUFFLE_CHANGED", { isShuffled: this.isShuffled });
     },
 
     lowerVolume: function () {
@@ -333,6 +488,7 @@ Module.register("MMM-SoundCloud", {
         return {
             isPaused: this.isPaused,
             volume: this.volume,
+            isShuffled: this.isShuffled,
             track: this.currentTrack ? {
                 title: this.currentTrack.title,
                 artist: this.currentTrack.user ? this.currentTrack.user.username : ""

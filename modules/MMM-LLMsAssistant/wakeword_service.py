@@ -601,7 +601,7 @@ QUY TẮC:
             model = genai.GenerativeModel('gemini-2.5-flash')
             
             context = self.conversation.get_context_prompt()
-            system_prompt = "You are Lens, a smart Vietnamese personal assistant created by Gia. Respond concisely."
+            system_prompt = "You are Lens, a smart personal assistant created by Gia. Respond concisely."
             
             if context:
                 prompt = f"{system_prompt}\n\n{context}\nUser: {text}\nLens:"
