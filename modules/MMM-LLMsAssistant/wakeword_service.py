@@ -59,6 +59,7 @@ class PvRecorderMicrophone:
     """
     Microphone class using PvRecorder for audio capture.
     Creates its own PvRecorder instance for speech capture.
+    Uses adaptive VAD for faster end-of-speech detection.
     """
     
     def __init__(self, sample_rate=16000, frame_length=512):
@@ -67,13 +68,30 @@ class PvRecorderMicrophone:
         self.SAMPLE_RATE = sample_rate
         self.frame_length = frame_length
         self.recorder = None
-        # Sensitivity settings
+        
+        # === IMPROVED VAD SETTINGS ===
+        # Base sensitivity settings
         self.energy_threshold = 100
-        self.pause_threshold = 1.5  # Seconds of silence to mark end of phrase
-        self.phrase_threshold = 0.3  # Minimum seconds of speech
-        self.non_speaking_duration = 0.5
+        self.dynamic_energy_ratio = 1.8  # Multiplier for ambient noise
+        
+        # Adaptive pause detection - starts short, extends if still speaking
+        self.min_pause_threshold = 0.6   # Minimum silence to end (faster response)
+        self.max_pause_threshold = 1.2   # Maximum silence to end
+        self.pause_threshold = 0.8       # Current/default pause threshold
+        
+        self.phrase_threshold = 0.2      # Minimum seconds of speech (reduced for quick commands)
+        self.non_speaking_duration = 0.3 # Pre-speech buffer (reduced)
+        
+        # Energy drop detection for natural end-of-speech
+        self.energy_drop_ratio = 0.3     # If energy drops to 30% of peak, likely end of speech
+        self.trailing_silence_chunks = 0 # Track consecutive low-energy frames
+        
         # Calculate chunk duration
         self.chunk_duration = frame_length / sample_rate
+        
+        # Statistics for adaptive adjustment
+        self.recent_speech_energies = []  # Track energy levels during speech
+        self.peak_speech_energy = 0       # Peak energy in current utterance
     
     def start(self):
         """Start the recorder for speech capture"""
@@ -116,20 +134,42 @@ class PvRecorderMicrophone:
                 energy = np.sqrt(np.mean(audio_array.astype(np.float64) ** 2))
                 energy_samples.append(energy)
             
-            avg_energy = np.mean(energy_samples)
-            # Set threshold slightly above ambient noise
-            self.energy_threshold = avg_energy * 1.5 + 50
+            if not energy_samples:
+                return
+                
+            # Use median instead of mean to be more robust to occasional spikes
+            median_energy = np.median(energy_samples)
+            # Also calculate standard deviation for adaptive threshold
+            std_energy = np.std(energy_samples)
+            
+            # Set threshold: median + 2*std gives ~95% confidence above noise
+            # but also use dynamic_energy_ratio as minimum multiplier
+            threshold_from_std = median_energy + 2 * std_energy
+            threshold_from_ratio = median_energy * self.dynamic_energy_ratio
+            
+            # Use the higher of the two methods, with a minimum floor
+            self.energy_threshold = max(
+                max(threshold_from_std, threshold_from_ratio),
+                80  # Absolute minimum threshold
+            )
+            
+            # Reset peak energy for new utterance
+            self.peak_speech_energy = 0
+            self.recent_speech_energies = []
         except Exception:
             pass
     
     def listen(self, timeout=None, phrase_time_limit=None):
         """
         Listen for speech using PvRecorder and return AudioData when speech ends.
+        Uses adaptive VAD with energy drop detection for faster response.
         """
         if not self.recorder:
             raise RuntimeError("PvRecorder not set. Call set_recorder() first.")
         
-        pause_chunks = int(self.pause_threshold / self.chunk_duration)
+        # Calculate chunk thresholds
+        min_pause_chunks = int(self.min_pause_threshold / self.chunk_duration)
+        max_pause_chunks = int(self.max_pause_threshold / self.chunk_duration)
         phrase_chunks = int(self.phrase_threshold / self.chunk_duration)
         
         audio_buffer = []
@@ -138,6 +178,12 @@ class PvRecorderMicrophone:
         speech_started = False
         start_time = time.time()
         speech_start_time = None
+        
+        # Adaptive VAD state
+        self.recent_speech_energies = []
+        self.peak_speech_energy = 0
+        energy_window = []  # Rolling window for smoothing
+        window_size = 3     # Smooth over 3 frames (~96ms at 512 frame_length)
         
         while True:
             # Check timeout
@@ -157,9 +203,14 @@ class PvRecorderMicrophone:
             except Exception:
                 continue
             
-            # Calculate energy
+            # Calculate energy with smoothing
             energy = np.sqrt(np.mean(audio_array.astype(np.float64) ** 2))
-            is_speech = energy > self.energy_threshold
+            energy_window.append(energy)
+            if len(energy_window) > window_size:
+                energy_window.pop(0)
+            smoothed_energy = np.mean(energy_window)
+            
+            is_speech = smoothed_energy > self.energy_threshold
             
             if is_speech:
                 if not speech_started:
@@ -173,17 +224,53 @@ class PvRecorderMicrophone:
                 audio_buffer.append(audio_array)
                 speech_chunks += 1
                 silent_chunks = 0
+                
+                # Track energy for adaptive end detection
+                self.recent_speech_energies.append(smoothed_energy)
+                if len(self.recent_speech_energies) > 30:  # ~1 second window
+                    self.recent_speech_energies.pop(0)
+                if smoothed_energy > self.peak_speech_energy:
+                    self.peak_speech_energy = smoothed_energy
             else:
                 if speech_started:
                     audio_buffer.append(audio_array)
                     silent_chunks += 1
                     
-                    if silent_chunks >= pause_chunks and speech_chunks >= phrase_chunks:
+                    # === ADAPTIVE END-OF-SPEECH DETECTION ===
+                    # Calculate dynamic pause threshold based on speech characteristics
+                    
+                    # 1. Energy drop detection - if energy dropped significantly, end sooner
+                    energy_drop_detected = False
+                    if self.peak_speech_energy > 0:
+                        current_ratio = smoothed_energy / self.peak_speech_energy
+                        if current_ratio < self.energy_drop_ratio:
+                            energy_drop_detected = True
+                    
+                    # 2. Adaptive pause threshold based on speech length
+                    # Short commands (< 1s): use shorter pause
+                    # Longer speech: use longer pause
+                    speech_duration = time.time() - speech_start_time if speech_start_time else 0
+                    if speech_duration < 1.0:
+                        # Quick command - respond faster
+                        adaptive_pause_chunks = min_pause_chunks
+                    elif speech_duration < 3.0:
+                        # Medium utterance
+                        adaptive_pause_chunks = int((min_pause_chunks + max_pause_chunks) / 2)
+                    else:
+                        # Longer speech - allow more pauses
+                        adaptive_pause_chunks = max_pause_chunks
+                    
+                    # 3. If energy dropped significantly, reduce required pause
+                    if energy_drop_detected:
+                        adaptive_pause_chunks = max(min_pause_chunks, adaptive_pause_chunks - 2)
+                    
+                    # End speech if conditions met
+                    if silent_chunks >= adaptive_pause_chunks and speech_chunks >= phrase_chunks:
                         break
                 else:
                     # Pre-speech buffer
                     audio_buffer.append(audio_array)
-                    max_buffer = int(2.0 / self.chunk_duration)
+                    max_buffer = int(1.5 / self.chunk_duration)  # Reduced pre-buffer
                     if len(audio_buffer) > max_buffer:
                         audio_buffer.pop(0)
         
@@ -212,7 +299,7 @@ NOISE_PATTERNS = [
 # Maximum conversation turns before auto-reset
 MAX_CONVERSATION_TURNS = 20
 # Maximum silence timeout (seconds) before ending conversation
-SILENCE_TIMEOUT = 8
+SILENCE_TIMEOUT = 5  # Reduced from 8s for faster response
 # Number of consecutive noise inputs before ending conversation
 MAX_CONSECUTIVE_NOISE = 2
 
@@ -287,14 +374,11 @@ class WakeWordService:
         self.recognizer = sr.Recognizer()
         self.microphone = None  # Will be initialized in start()
         
-        # Speech recognition tuning to prevent early cutoff
-        # pause_threshold: seconds of silence before considering speech done (default 0.8)
-        self.recognizer.pause_threshold = 1.5  # Give user more time to pause between phrases
-        # phrase_threshold: minimum seconds of speaking before considering it a phrase (default 0.3)
-        self.recognizer.phrase_threshold = 0.3
-        # non_speaking_duration: seconds of non-speaking audio to keep before/after phrase (default 0.5)
-        self.recognizer.non_speaking_duration = 0.5
-        # dynamic_energy_threshold: auto-adjust for ambient noise
+        # Speech recognition tuning - matched to PvRecorderMicrophone VAD settings
+        # These are backup settings; primary VAD is in PvRecorderMicrophone
+        self.recognizer.pause_threshold = 0.8   # Reduced from 1.5 for faster response
+        self.recognizer.phrase_threshold = 0.2  # Minimum speech duration
+        self.recognizer.non_speaking_duration = 0.3  # Reduced buffer
         self.recognizer.dynamic_energy_threshold = True
         self.conversation = ConversationManager()
         
