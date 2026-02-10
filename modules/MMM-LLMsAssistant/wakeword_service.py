@@ -850,21 +850,14 @@ QUY TAC PHAN HOI:
             for chunk in chat.send_message_stream(text):
                 chunk_count += 1
                 
-                # Debug: Log what's in the chunk
-                has_candidates = bool(chunk.candidates)
-                has_text = bool(chunk.text) if hasattr(chunk, 'text') else False
-                
-                # Check for function calls
+                # Check for function calls in parts
                 if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
                     for part in chunk.candidates[0].content.parts:
                         if part.function_call:
                             function_calls.append(part.function_call)
                             self.emit("debug", message=f"Found function call: {part.function_call.name}")
-                        # Also collect text that may appear alongside function calls
-                        if hasattr(part, 'text') and part.text:
-                            full_text += part.text
                 
-                # Also try chunk.text for text-only chunks
+                # Collect text from chunk.text (avoid duplicate by not also reading from parts)
                 if chunk.text:
                     full_text += chunk.text
             
