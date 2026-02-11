@@ -76,6 +76,7 @@ class PvRecorderMicrophone:
         self.SAMPLE_RATE = sample_rate
         self.frame_length = frame_length
         self.recorder = None
+        self.on_speech_start = None  # Callback when speech starts
         
         # === WebRTC VAD (used with energy for hybrid detection) ===
         self.use_webrtc_vad = WEBRTC_VAD_AVAILABLE
@@ -300,6 +301,9 @@ class PvRecorderMicrophone:
                 if not speech_started:
                     speech_started = True
                     speech_start_time = time.time()
+                    # Notify that user started speaking
+                    if self.on_speech_start:
+                        self.on_speech_start()
                     # Keep some pre-speech buffer
                     pre_buffer_chunks = int(self.non_speaking_duration / self.chunk_duration)
                     if len(audio_buffer) > pre_buffer_chunks:
@@ -588,6 +592,8 @@ class WakeWordService:
                 sample_rate=self.porcupine.sample_rate,
                 frame_length=self.porcupine.frame_length
             )
+            # Set callback to emit listening_active when user starts speaking
+            self.microphone.on_speech_start = lambda: self.emit("listening_active")
             
             # Pre-adjust for ambient noise once at startup (start microphone temporarily)
             try:
@@ -1144,6 +1150,7 @@ QUY TAC PHAN HOI:
             # If there were function calls, execute them and get the final answer
             if function_calls:
                 self.emit("debug", message=f"Processing {len(function_calls)} function call(s)...")
+                self.emit("tool_call", tool_name=function_calls[0].name)
                 
                 # Execute tools
                 function_responses = []
@@ -1200,6 +1207,7 @@ QUY TAC PHAN HOI:
                     
                     # Execute new function calls
                     self.emit("debug", message=f"Gemini wants {len(new_function_calls)} more function call(s)...")
+                    self.emit("tool_call", tool_name=new_function_calls[0].name)
                     function_responses = []
                     for fc in new_function_calls:
                         tool_name = fc.name
@@ -1259,6 +1267,7 @@ QUY TAC PHAN HOI:
                     
                     if retry_fc:
                         self.emit("debug", message=f"Retry found {len(retry_fc)} function call(s)")
+                        self.emit("tool_call", tool_name=retry_fc[0].name)
                         # Execute retry function calls
                         function_responses = []
                         for fc in retry_fc:

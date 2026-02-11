@@ -174,6 +174,16 @@ module.exports = NodeHelper.create({
                 this.sendSocketNotification("LISTENING", {});
                 break;
 
+            case "listening_active":
+                console.log("[MMM-LLMsAssistant] Actively listening to user speech...");
+                this.sendSocketNotification("LISTENING_ACTIVE", {});
+                break;
+
+            case "tool_call":
+                console.log(`[MMM-LLMsAssistant] Tool call: ${event.tool_name || ''}`);
+                this.sendSocketNotification("TOOL_CALL", { tool_name: event.tool_name || '' });
+                break;
+
             case "speech": {
                 const text = this.decodeBase64Text(event, "text");
                 console.log(`[MMM-LLMsAssistant] Speech: ${text}`);

@@ -39,36 +39,58 @@
     animation: pulse-idle 3s infinite;
 }
 
-/* Listening state */
-.assistant-orb.listening {
+/* Activated state - wake word detected, waiting for user to speak (cyan/blue) */
+.assistant-orb.activated {
     border-color: #00d9ff;
     box-shadow: 0 0 20px rgba(0, 217, 255, 0.4);
 }
 
-.assistant-orb.listening::before {
+.assistant-orb.activated::before {
     background: #00d9ff;
-    animation: pulse-active 0.5s infinite;
+    animation: pulse-active 1.5s infinite;
 }
 
-/* Processing state */
-.assistant-orb.processing {
-    border-color: #ffd700;
-    box-shadow: 0 0 20px rgba(255, 215, 0, 0.4);
+/* Listening state - actively hearing user speech (purple) */
+.assistant-orb.listening {
+    border-color: #b44dff;
+    box-shadow: 0 0 25px rgba(180, 77, 255, 0.5);
 }
 
-.assistant-orb.processing::before {
-    background: #ffd700;
-    animation: spin 1s linear infinite;
+.assistant-orb.listening::before {
+    background: #b44dff;
+    animation: pulse-active 0.4s infinite;
 }
 
-/* Speaking state */
-.assistant-orb.speaking {
+/* Waiting for LLM response (green) */
+.assistant-orb.waiting-llm {
     border-color: #00ff88;
     box-shadow: 0 0 20px rgba(0, 255, 136, 0.4);
 }
 
-.assistant-orb.speaking::before {
+.assistant-orb.waiting-llm::before {
     background: #00ff88;
+    animation: spin 1s linear infinite;
+}
+
+/* Tool call in progress (red) */
+.assistant-orb.toolcall {
+    border-color: #ff4444;
+    box-shadow: 0 0 25px rgba(255, 68, 68, 0.5);
+}
+
+.assistant-orb.toolcall::before {
+    background: #ff4444;
+    animation: spin 0.6s linear infinite;
+}
+
+/* Speaking state (gold/yellow) */
+.assistant-orb.speaking {
+    border-color: #ffd700;
+    box-shadow: 0 0 20px rgba(255, 215, 0, 0.4);
+}
+
+.assistant-orb.speaking::before {
+    background: #ffd700;
     animation: speak 0.3s infinite;
 }
 

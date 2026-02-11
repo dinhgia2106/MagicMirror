@@ -16,7 +16,7 @@ Module.register("MMM-LLMsAssistant", {
 
     start: function () {
         Log.info("Starting module: " + this.name);
-        this.state = "idle"; // idle, listening, processing, speaking, conversing
+        this.state = "idle"; // idle, activated, listening, waiting-llm, toolcall, speaking
         this.transcript = "";
         this.response = "";
         this.isConversationActive = false;
@@ -39,8 +39,10 @@ Module.register("MMM-LLMsAssistant", {
     getStatusText: function () {
         switch (this.state) {
             case "idle": return `Say "${this.config.wakeWord}"`;
+            case "activated": return "Ready...";
             case "listening": return "Listening...";
-            case "processing": return "Thinking...";
+            case "waiting-llm": return "Thinking...";
+            case "toolcall": return "Working...";
             case "speaking": return "Speaking...";
             default: return "";
         }
@@ -49,7 +51,7 @@ Module.register("MMM-LLMsAssistant", {
     socketNotificationReceived: function (notification, payload) {
         switch (notification) {
             case "WAKE_WORD_DETECTED":
-                this.state = "listening";
+                this.state = "activated";
                 this.transcript = "";
                 this.response = "";
                 this.isConversationActive = true;
@@ -57,19 +59,29 @@ Module.register("MMM-LLMsAssistant", {
                 break;
 
             case "CONVERSATION_STARTED":
-                this.state = "listening";
+                this.state = "activated";
                 this.isConversationActive = true;
                 this.updateDom(300);
                 break;
 
             case "LISTENING":
+                this.state = "activated";
+                this.updateDom(300);
+                break;
+
+            case "LISTENING_ACTIVE":
                 this.state = "listening";
                 this.updateDom(300);
                 break;
 
             case "SPEECH_RECOGNIZED":
-                this.state = "processing";
+                this.state = "waiting-llm";
                 this.transcript = payload.text;
+                this.updateDom(300);
+                break;
+
+            case "TOOL_CALL":
+                this.state = "toolcall";
                 this.updateDom(300);
                 break;
 
@@ -81,14 +93,14 @@ Module.register("MMM-LLMsAssistant", {
 
             case "RESPONSE_COMPLETE":
                 // AI finished speaking, ready for next input
-                this.state = "listening";
+                this.state = "activated";
                 this.updateDom(300);
                 break;
 
             case "SPEECH_COMPLETE":
-                // If conversation is still active, go back to listening
+                // If conversation is still active, go back to activated
                 if (this.isConversationActive) {
-                    this.state = "listening";
+                    this.state = "activated";
                 } else {
                     this.state = "idle";
                     // Clear after delay
