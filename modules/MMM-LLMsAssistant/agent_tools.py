@@ -837,6 +837,254 @@ class AgentTools:
             "message": result["message"]
         }
     
+    # ==================== WEB SEARCH TOOLS ====================
+    
+    def web_search(self, query: str, num_results: int = 5) -> Dict[str, Any]:
+        """
+        Search the web for information using DuckDuckGo.
+        Use this when the user asks about current events, news, people, places,
+        or any factual question you're unsure about.
+        
+        Args:
+            query: The search query string
+            num_results: Number of results to return (default: 5, max: 10)
+        """
+        if not query or not query.strip():
+            return {"success": False, "error": "Search query cannot be empty"}
+        
+        num_results = max(1, min(int(num_results), 10))
+        
+        # Try DuckDuckGo HTML search (no API key needed)
+        try:
+            return self._search_duckduckgo(query.strip(), num_results)
+        except Exception as e1:
+            # Fallback: try DuckDuckGo Lite
+            try:
+                return self._search_duckduckgo_lite(query.strip(), num_results)
+            except Exception as e2:
+                return {
+                    "success": False,
+                    "error": f"Web search failed: {str(e1)} | Fallback: {str(e2)}"
+                }
+    
+    def _search_duckduckgo(self, query: str, num_results: int) -> Dict[str, Any]:
+        """Search using DuckDuckGo HTML endpoint"""
+        import re as _re
+        from html import unescape
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+        
+        response = requests.get(
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
+            headers=headers,
+            timeout=10
+        )
+        response.raise_for_status()
+        html = response.text
+        
+        results = []
+        # Parse result blocks from DuckDuckGo HTML
+        result_blocks = _re.findall(
+            r'<a rel="nofollow" class="result__a" href="([^"]+)"[^>]*>(.+?)</a>.*?'
+            r'<a class="result__snippet"[^>]*>(.+?)</a>',
+            html, _re.DOTALL
+        )
+        
+        for url, title, snippet in result_blocks[:num_results]:
+            # Clean HTML tags from title and snippet
+            clean_title = _re.sub(r'<[^>]+>', '', unescape(title)).strip()
+            clean_snippet = _re.sub(r'<[^>]+>', '', unescape(snippet)).strip()
+            # DuckDuckGo uses redirect URLs, extract the actual URL
+            actual_url = url
+            if 'uddg=' in url:
+                url_match = _re.search(r'uddg=([^&]+)', url)
+                if url_match:
+                    from urllib.parse import unquote
+                    actual_url = unquote(url_match.group(1))
+            results.append({
+                "title": clean_title,
+                "snippet": clean_snippet,
+                "url": actual_url
+            })
+        
+        if not results:
+            return {
+                "success": True,
+                "data": {
+                    "query": query,
+                    "results": [],
+                    "count": 0,
+                    "message": "No results found for this query"
+                }
+            }
+        
+        return {
+            "success": True,
+            "data": {
+                "query": query,
+                "results": results,
+                "count": len(results),
+                "source": "duckduckgo"
+            }
+        }
+    
+    def _search_duckduckgo_lite(self, query: str, num_results: int) -> Dict[str, Any]:
+        """Fallback: Search using DuckDuckGo Lite (simpler HTML)"""
+        import re as _re
+        from html import unescape
+        
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        }
+        
+        response = requests.get(
+            "https://lite.duckduckgo.com/lite/",
+            params={"q": query},
+            headers=headers,
+            timeout=10
+        )
+        response.raise_for_status()
+        html = response.text
+        
+        results = []
+        # Parse from DuckDuckGo Lite table format
+        link_blocks = _re.findall(
+            r'<a rel="nofollow" href="([^"]+)" class=\'result-link\'>(.+?)</a>',
+            html, _re.DOTALL
+        )
+        snippet_blocks = _re.findall(
+            r'<td class="result-snippet">(.+?)</td>',
+            html, _re.DOTALL
+        )
+        
+        for i, (url, title) in enumerate(link_blocks[:num_results]):
+            clean_title = _re.sub(r'<[^>]+>', '', unescape(title)).strip()
+            clean_snippet = ""
+            if i < len(snippet_blocks):
+                clean_snippet = _re.sub(r'<[^>]+>', '', unescape(snippet_blocks[i])).strip()
+            results.append({
+                "title": clean_title,
+                "snippet": clean_snippet,
+                "url": url
+            })
+        
+        return {
+            "success": True,
+            "data": {
+                "query": query,
+                "results": results,
+                "count": len(results),
+                "source": "duckduckgo_lite"
+            }
+        }
+    
+    def web_read(self, url: str) -> Dict[str, Any]:
+        """
+        Read and extract main text content from a web page URL.
+        Use this after web_search to get more details from a specific result.
+        
+        Args:
+            url: The URL of the web page to read
+        """
+        if not url or not url.strip():
+            return {"success": False, "error": "URL cannot be empty"}
+        
+        try:
+            import re as _re
+            from html import unescape
+            
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
+            
+            response = requests.get(url.strip(), headers=headers, timeout=15)
+            response.raise_for_status()
+            html = response.text
+            
+            # Remove script, style, nav, footer, header tags
+            for tag in ['script', 'style', 'nav', 'footer', 'header', 'aside', 'iframe']:
+                html = _re.sub(f'<{tag}[^>]*>.*?</{tag}>', '', html, flags=_re.DOTALL | _re.IGNORECASE)
+            
+            # Remove HTML comments
+            html = _re.sub(r'<!--.*?-->', '', html, flags=_re.DOTALL)
+            
+            # Extract title
+            title_match = _re.search(r'<title[^>]*>(.*?)</title>', html, _re.DOTALL | _re.IGNORECASE)
+            title = unescape(title_match.group(1).strip()) if title_match else ""
+            
+            # Extract meta description
+            meta_match = _re.search(
+                r'<meta[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']",',
+                html, _re.IGNORECASE
+            )
+            if not meta_match:
+                meta_match = _re.search(
+                    r'<meta[^>]*content=["\']([^"\']*)["\'][^>]*name=["\']description["\']',
+                    html, _re.IGNORECASE
+                )
+            meta_desc = unescape(meta_match.group(1).strip()) if meta_match else ""
+            
+            # Try to find main content areas
+            content = ""
+            # Look for article, main, or specific content divs
+            for pattern in [
+                r'<article[^>]*>(.*?)</article>',
+                r'<main[^>]*>(.*?)</main>',
+                r'<div[^>]*class="[^"]*content[^"]*"[^>]*>(.*?)</div>',
+                r'<div[^>]*id="content"[^>]*>(.*?)</div>',
+            ]:
+                match = _re.search(pattern, html, _re.DOTALL | _re.IGNORECASE)
+                if match:
+                    content = match.group(1)
+                    break
+            
+            # Fallback: use body
+            if not content:
+                body_match = _re.search(r'<body[^>]*>(.*?)</body>', html, _re.DOTALL | _re.IGNORECASE)
+                if body_match:
+                    content = body_match.group(1)
+            
+            if not content:
+                content = html
+            
+            # Extract text from paragraphs for cleaner output
+            paragraphs = _re.findall(r'<p[^>]*>(.*?)</p>', content, _re.DOTALL | _re.IGNORECASE)
+            if paragraphs:
+                text_parts = []
+                for p in paragraphs:
+                    clean = _re.sub(r'<[^>]+>', '', unescape(p)).strip()
+                    if clean and len(clean) > 20:  # Skip very short paragraphs
+                        text_parts.append(clean)
+                text_content = '\n\n'.join(text_parts)
+            else:
+                # Fallback: strip all HTML tags
+                text_content = _re.sub(r'<[^>]+>', ' ', content)
+                text_content = unescape(text_content)
+                text_content = _re.sub(r'\s+', ' ', text_content).strip()
+            
+            # Truncate to reasonable length (avoid token explosion)
+            max_chars = 3000
+            if len(text_content) > max_chars:
+                text_content = text_content[:max_chars] + "...[truncated]"
+            
+            return {
+                "success": True,
+                "data": {
+                    "url": url,
+                    "title": title,
+                    "meta_description": meta_desc,
+                    "content": text_content,
+                    "content_length": len(text_content)
+                }
+            }
+        except requests.RequestException as e:
+            return {"success": False, "error": f"Failed to read URL: {str(e)}"}
+        except Exception as e:
+            return {"success": False, "error": f"Error parsing page: {str(e)}"}
+    
     # ==================== UTILITY METHODS ====================
     
     def execute_tool(self, tool_name: str, arguments: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -871,6 +1119,9 @@ class AgentTools:
             "memory_save": self.memory_save,
             "memory_list": self.memory_list,
             "memory_remove": self.memory_remove,
+            # Web search tools
+            "web_search": self.web_search,
+            "web_read": self.web_read,
         }
         
         if tool_name not in tool_map:
@@ -1164,6 +1415,39 @@ TOOL_DECLARATIONS = [
                 }
             },
             "required": ["section", "content"]
+        }
+    },
+    # Web search tools
+    {
+        "name": "web_search",
+        "description": "Tim kiem thong tin tren internet. Su dung khi nguoi dung hoi ve tin tuc, su kien hien tai, nguoi noi tieng, dia diem, san pham, bat ky cau hoi thuc te nao ma ban khong chac chan hoac can thong tin cap nhat. Vi du: 'tin tuc hom nay', 'gia vang bao nhieu', 'thong tin ve...', 'ai la...', 'cai gi la...', 'search for...'. KHONG can dung khi ban da biet cau tra loi chac chan.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query - should be specific and concise for best results"
+                },
+                "num_results": {
+                    "type": "integer",
+                    "description": "Number of results to return (1-10, default: 5)"
+                }
+            },
+            "required": ["query"]
+        }
+    },
+    {
+        "name": "web_read",
+        "description": "Doc noi dung chi tiet tu mot trang web. Su dung SAU web_search de lay thong tin chi tiet hon tu mot ket qua cu the. Chi dung khi snippet tu web_search khong du thong tin de tra loi.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL of the web page to read"
+                }
+            },
+            "required": ["url"]
         }
     }
 ]

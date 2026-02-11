@@ -504,7 +504,8 @@ class WakeWordService:
             "Bạn là trợ lý đa năng, có thể giúp đỡ nhiều việc khác nhau:\n"
             "1. Trò chuyện, dạy học (ngôn ngữ, kiến thức), và trả lời mọi câu hỏi của người dùng bằng kiến thức rộng lớn của bạn.\n"
             "2. Sử dụng các công cụ (tools) ĐƯỢC CUNG CẤP để tra cứu thời gian, thời tiết, ngày lễ, điều khiển nhạc KHI CẦN THIẾT.\n"
-            "3. Giải đáp thắc mắc, tư vấn và hỗ trợ mọi vấn đề trong cuộc sống.\n"
+            "3. TÌM KIẾM INTERNET: Dùng web_search khi cần thông tin mới nhất (tin tức, giá cả, sự kiện, người nổi tiếng, sản phẩm, v.v.) hoặc khi không chắc chắn câu trả lời. Dùng web_read để đọc chi tiết trang web nếu snippet chưa đủ.\n"
+            "4. Giải đáp thắc mắc, tư vấn và hỗ trợ mọi vấn đề trong cuộc sống.\n"
             "LƯU Ý: Bạn KHÔNG bị giới hạn chỉ trong các công cụ trên. Hãy thoải mái dạy ngoại ngữ, kể chuyện, làm thơ, hoặc thảo luận bất kỳ chủ đề nào người dùng muốn.\n"
             "Hãy trả lời một cách tự nhiên, ngắn gọn và hữu ích hoàn toàn bằng tiếng Việt.\n"
             "\n"
@@ -1172,6 +1173,125 @@ class WakeWordService:
                 except Exception as e:
                     self.emit("error", message=f"Phase TTS error: {e}")
     
+    def _parse_gemini_chunk(self, chunk):
+        """Parse a Gemini response chunk, extracting text and function calls.
+        Uses explicit 'is not None' checks to avoid falsy Content/Part objects.
+        Returns (text_parts: list[str], func_calls: list, finish_reason)"""
+        text_parts = []
+        func_calls = []
+        finish_reason = None
+        
+        try:
+            candidates = getattr(chunk, 'candidates', None)
+            if not candidates:
+                return text_parts, func_calls, finish_reason
+            
+            candidate = candidates[0]
+            finish_reason = getattr(candidate, 'finish_reason', None)
+            
+            content = getattr(candidate, 'content', None)
+            if content is None:
+                return text_parts, func_calls, finish_reason
+            
+            parts = getattr(content, 'parts', None)
+            if not parts:
+                return text_parts, func_calls, finish_reason
+            
+            for part in parts:
+                # Check function_call using getattr to avoid truthiness issues
+                fc = getattr(part, 'function_call', None)
+                if fc is not None and getattr(fc, 'name', None):
+                    func_calls.append(fc)
+                else:
+                    t = getattr(part, 'text', None)
+                    if t:
+                        text_parts.append(t)
+        except Exception as e:
+            self.emit("debug", message=f"Chunk parse exception: {type(e).__name__}: {e}")
+        
+        return text_parts, func_calls, finish_reason
+
+    def _dump_chunk_debug(self, chunk, label="chunk"):
+        """Dump raw chunk data for debugging empty responses"""
+        try:
+            candidates = getattr(chunk, 'candidates', None)
+            if not candidates:
+                self.emit("debug", message=f"[{label}] No candidates. Raw: {str(chunk)[:300]}")
+                return
+            c = candidates[0]
+            fr = getattr(c, 'finish_reason', 'N/A')
+            content = getattr(c, 'content', None)
+            if content is None:
+                self.emit("debug", message=f"[{label}] content=None, finish_reason={fr}")
+                return
+            parts = getattr(content, 'parts', None)
+            if not parts:
+                self.emit("debug", message=f"[{label}] parts empty/None, role={getattr(content, 'role', 'N/A')}, finish_reason={fr}")
+                return
+            for i, part in enumerate(parts):
+                fc = getattr(part, 'function_call', None)
+                txt = getattr(part, 'text', None)
+                self.emit("debug", message=f"[{label}] part[{i}]: text={repr(txt)[:100] if txt else 'None'}, fc={getattr(fc, 'name', None) if fc else 'None'}, type={type(part).__name__}")
+        except Exception as e:
+            self.emit("debug", message=f"[{label}] dump error: {e}, raw={str(chunk)[:200]}")
+
+    def _try_direct_search_fallback(self, user_text, client, system_instruction, safety_settings, retry_contents, types):
+        """
+        Last-resort fallback: If Gemini returns empty responses, detect search intent 
+        and call web_search directly, then feed results to Gemini WITHOUT tools
+        to get a natural language answer.
+        Returns response text or None.
+        """
+        try:
+            self.emit("debug", message="Attempting direct web_search fallback...")
+            
+            # Execute web_search directly with user's text as query
+            search_result = self.agent_tools.web_search(user_text)
+            
+            if not search_result.get("success") or not search_result.get("data", {}).get("results"):
+                self.emit("debug", message="Direct search returned no results")
+                return None
+            
+            # Format search results as context
+            results = search_result["data"]["results"]
+            search_context = f"Ket qua tim kiem cho '{user_text}':\n"
+            for i, r in enumerate(results[:5], 1):
+                search_context += f"\n{i}. {r.get('title', 'N/A')}\n   {r.get('snippet', 'N/A')}\n   URL: {r.get('url', '')}\n"
+            
+            # Ask Gemini to summarize WITHOUT tools (avoids the empty response issue)
+            self.emit("debug", message=f"Feeding {len(results)} search results to Gemini (no tools)...")
+            
+            summary_prompt = f"""Nguoi dung hoi: "{user_text}"
+
+Day la ket qua tim kiem tu internet:
+{search_context}
+
+Hay tom tat va tra loi cau hoi cua nguoi dung dua tren cac ket qua tren. Tra loi bang tieng Viet, ngan gon va tu nhien. KHONG dung markdown."""
+
+            summary_response = client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=summary_prompt,
+                config=types.GenerateContentConfig(
+                    max_output_tokens=1024,
+                    temperature=0.7,
+                )
+            )
+            
+            if summary_response.text:
+                self.emit("debug", message=f"Direct search fallback succeeded: {len(summary_response.text)} chars")
+                return summary_response.text
+            
+            # If Gemini still returns nothing, just return raw search snippets
+            self.emit("debug", message="Gemini summary failed, returning raw snippets")
+            raw_answer = f"Kết quả tìm kiếm cho '{user_text}':\n"
+            for i, r in enumerate(results[:3], 1):
+                raw_answer += f"{i}. {r.get('title', '')}: {r.get('snippet', '')}\n"
+            return raw_answer
+            
+        except Exception as e:
+            self.emit("debug", message=f"Direct search fallback error: {e}")
+            return None
+
     def stream_gemini_response_with_context(self, text):
         """Stream response from Gemini with conversation context and function calling"""
         try:
@@ -1232,30 +1352,22 @@ QUY TAC PHAN HOI:
             last_finish_reason = None
             
             # Stream the response - collect all text and function calls
+            last_chunk = None
             for chunk in chat.send_message_stream(text):
                 chunk_count += 1
+                last_chunk = chunk
                 
-                # Log finish_reason for debugging empty responses
-                try:
-                    if chunk.candidates and chunk.candidates[0].finish_reason:
-                        last_finish_reason = chunk.candidates[0].finish_reason
-                except (AttributeError, IndexError):
-                    pass
-                
-                # Check for function calls in parts FIRST (before chunk.text which may raise ValueError)
-                try:
-                    if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                        for part in chunk.candidates[0].content.parts:
-                            if hasattr(part, 'function_call') and part.function_call:
-                                function_calls.append(part.function_call)
-                                self.emit("debug", message=f"Found function call: {part.function_call.name}")
-                            elif hasattr(part, 'text') and part.text:
-                                full_text += part.text
-                except (AttributeError, IndexError) as e:
-                    self.emit("debug", message=f"Chunk parse error: {e}")
+                text_parts, func_calls, fr = self._parse_gemini_chunk(chunk)
+                if fr:
+                    last_finish_reason = fr
+                if text_parts:
+                    full_text += ''.join(text_parts)
+                for fc in func_calls:
+                    function_calls.append(fc)
+                    self.emit("debug", message=f"Found function call: {fc.name}")
                 
                 # Also try chunk.text as fallback (wrapped in try-except for safety)
-                if not full_text:
+                if not full_text and not func_calls:
                     try:
                         if chunk.text:
                             full_text += chunk.text
@@ -1264,12 +1376,12 @@ QUY TAC PHAN HOI:
             
             self.emit("debug", message=f"Stream finished: {chunk_count} chunks, {len(function_calls)} function calls, text len={len(full_text)}, finish_reason={last_finish_reason}")
             
-            # Log safety ratings if response is empty (helps diagnose silent blocks)
-            if not full_text and not function_calls and chunk_count > 0:
+            # Dump raw chunk data if response is empty (critical for diagnosing issues)
+            if not full_text and not function_calls and chunk_count > 0 and last_chunk:
+                self._dump_chunk_debug(last_chunk, "empty_stream")
                 try:
-                    last_chunk = chunk  # Last chunk from the for loop
-                    if hasattr(last_chunk, 'candidates') and last_chunk.candidates:
-                        candidate = last_chunk.candidates[0]
+                    candidate = last_chunk.candidates[0] if last_chunk.candidates else None
+                    if candidate:
                         if hasattr(candidate, 'safety_ratings') and candidate.safety_ratings:
                             ratings = [(r.category, r.probability) for r in candidate.safety_ratings]
                             self.emit("debug", message=f"Safety ratings: {ratings}")
@@ -1314,23 +1426,10 @@ QUY TAC PHAN HOI:
                     
                     new_function_calls = []
                     for chunk in chat.send_message_stream(function_responses):
-                        # Check for more function calls (robust parsing)
-                        try:
-                            if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                                for part in chunk.candidates[0].content.parts:
-                                    if hasattr(part, 'function_call') and part.function_call:
-                                        new_function_calls.append(part.function_call)
-                                    elif hasattr(part, 'text') and part.text:
-                                        full_text += part.text
-                        except (AttributeError, IndexError) as e:
-                            self.emit("debug", message=f"Chunk parse error in tool round: {e}")
-                        
-                        try:
-                            if chunk.text:
-                                # Only add if not already captured from parts
-                                pass
-                        except (ValueError, AttributeError):
-                            pass
+                        text_parts, func_calls, _ = self._parse_gemini_chunk(chunk)
+                        if text_parts:
+                            full_text += ''.join(text_parts)
+                        new_function_calls.extend(func_calls)
                     
                     # If no more function calls, we're done
                     if not new_function_calls:
@@ -1416,14 +1515,15 @@ QUY TAC PHAN HOI:
                         )
                     )
                     
-                    # Check for function calls in retry
-                    retry_fc = []
-                    if retry_response.candidates and retry_response.candidates[0].content and retry_response.candidates[0].content.parts:
-                        for part in retry_response.candidates[0].content.parts:
-                            if hasattr(part, 'function_call') and part.function_call:
-                                retry_fc.append(part.function_call)
-                            elif hasattr(part, 'text') and part.text:
-                                full_text += part.text
+                    # Check for function calls in retry using robust parser
+                    retry_text_parts, retry_fc, retry_fr = self._parse_gemini_chunk(retry_response)
+                    if retry_text_parts:
+                        full_text += ''.join(retry_text_parts)
+                    
+                    # Dump debug if retry also empty
+                    if not retry_text_parts and not retry_fc:
+                        self._dump_chunk_debug(retry_response, "empty_retry")
+                        self.emit("debug", message=f"Retry finish_reason={retry_fr}")
                     
                     if retry_fc:
                         self.emit("debug", message=f"Retry found {len(retry_fc)} function call(s)")
@@ -1477,16 +1577,42 @@ QUY TAC PHAN HOI:
                         self.emit("debug", message=f"Retry succeeded: text len={len(full_text)}")
                     else:
                         self.emit("debug", message="WARNING: Retry also returned no response")
-                        full_text = "Xin lỗi, tôi không nhận được phản hồi. Bạn thử lại nhé."
+                        
+                        # === DIRECT TOOL FALLBACK ===
+                        # If Gemini refuses to respond, detect search intent and call web_search directly
+                        # Then feed results to Gemini without tools to get a natural language summary
+                        search_result = self._try_direct_search_fallback(text, client, system_instruction, safety_settings, retry_contents, types)
+                        if search_result:
+                            full_text = search_result
+                            clean_text = self.clean_text_for_tts(full_text)
+                            self.emit("llm_response", text=clean_text)
+                            self.tts_queue.put(clean_text)
+                        else:
+                            full_text = "Xin lỗi, tôi không nhận được phản hồi. Bạn thử lại nhé."
+                            clean_text = self.clean_text_for_tts(full_text)
+                            self.emit("llm_response", text=clean_text)
+                            self.tts_queue.put(clean_text)
+                except Exception as retry_err:
+                    self.emit("debug", message=f"Retry error: {retry_err}")
+                    
+                    # Try direct search fallback even on retry exception
+                    try:
+                        from google import genai as genai_fb
+                        from google.genai import types as types_fb
+                        client_fb = genai_fb.Client(api_key=self.llm_api_key)
+                        search_result = self._try_direct_search_fallback(text, client_fb, self.system_prompt, [], [], types_fb)
+                        if search_result:
+                            full_text = search_result
+                            clean_text = self.clean_text_for_tts(full_text)
+                            self.emit("llm_response", text=clean_text)
+                            self.tts_queue.put(clean_text)
+                        else:
+                            raise Exception("Direct search fallback also failed")
+                    except Exception:
+                        full_text = "Xin lỗi, có lỗi xảy ra. Bạn thử lại nhé."
                         clean_text = self.clean_text_for_tts(full_text)
                         self.emit("llm_response", text=clean_text)
                         self.tts_queue.put(clean_text)
-                except Exception as retry_err:
-                    self.emit("debug", message=f"Retry error: {retry_err}")
-                    full_text = "Xin lỗi, có lỗi xảy ra. Bạn thử lại nhé."
-                    clean_text = self.clean_text_for_tts(full_text)
-                    self.emit("llm_response", text=clean_text)
-                    self.tts_queue.put(clean_text)
             
             return full_text, music_tool_called
 
