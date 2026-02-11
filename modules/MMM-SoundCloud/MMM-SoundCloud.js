@@ -31,6 +31,8 @@ Module.register("MMM-SoundCloud", {
         this.isShuffled = false;
         this.shuffleQueue = [];      // Queue of unplayed track indices
         this.totalTracks = 0;        // Total number of tracks in playlist
+        this.playHistory = [];       // Stack of played tracks for prev navigation
+                                     // Each entry: { type: "album"|"global", index?, trackUrl?, trackInfo? }
 
         // Play mode: "album" = return to playlist after search, "global" = auto-play related tracks
         this.playMode = "album";
@@ -484,7 +486,9 @@ Module.register("MMM-SoundCloud", {
         });
 
         this.widget.bind(SC.Widget.Events.FINISH, () => {
-            // Track finished
+            // Track finished - push to history before advancing
+            this.pushCurrentToHistory();
+
             if (this.isPlayingSearched && this.playMode === "global") {
                 // Global mode: find and play related tracks instead of returning
                 Log.info("MMM-SoundCloud: Global mode - searching for related track");
@@ -615,6 +619,9 @@ Module.register("MMM-SoundCloud", {
 
     next: function () {
         if (this.widget && this.widgetReady) {
+            // Save current track to history before moving forward
+            this.pushCurrentToHistory();
+
             if (this.playMode === "global" && (this.isPlayingSearched || this.currentGlobalTrack)) {
                 // Global mode: skip to next related track
                 this.playNextRelatedTrack();
@@ -635,20 +642,106 @@ Module.register("MMM-SoundCloud", {
 
     prev: function () {
         if (this.widget && this.widgetReady) {
-            // In global mode with search, restart current track or go back
-            if (this.playMode === "global" && this.isPlayingSearched) {
-                // If past 3 seconds, restart; otherwise ignore (no history stack)
-                if (this.currentPosition > 3000) {
-                    this.widget.seekTo(0);
-                }
+            // If past 3 seconds, restart current track first
+            if (this.currentPosition > 3000) {
+                this.widget.seekTo(0);
                 return;
             }
-            // Album mode: if playing searched song, return to album
+
+            // Try to go back in history
+            if (this.playHistory.length > 0) {
+                this.playFromHistory();
+                return;
+            }
+
+            // No history - default behavior
             if (this.isPlayingSearched) {
                 this.returnToSavedTrack();
                 return;
             }
             this.widget.prev();
+        }
+    },
+
+    // Push current track info to history stack
+    pushCurrentToHistory: function () {
+        if (this.playMode === "global" && this.currentGlobalTrack) {
+            // Global mode: save track URL and info for reload
+            const sound = this.currentTrack;
+            if (sound) {
+                this.playHistory.push({
+                    type: "global",
+                    trackUrl: sound.permalink_url,
+                    trackInfo: {
+                        id: this.currentGlobalTrack.id,
+                        title: this.currentGlobalTrack.title,
+                        artist: this.currentGlobalTrack.artist,
+                        genre: this.currentGlobalTrack.genre || "",
+                        tag_list: this.currentGlobalTrack.tag_list || ""
+                    }
+                });
+                Log.info("MMM-SoundCloud: Pushed global track to history: " + this.currentGlobalTrack.title + " (" + this.playHistory.length + " in stack)");
+            }
+        } else {
+            // Album mode: save track index
+            this.widget.getCurrentSoundIndex((index) => {
+                if (index >= 0) {
+                    this.playHistory.push({
+                        type: "album",
+                        index: index
+                    });
+                    Log.info("MMM-SoundCloud: Pushed album track " + index + " to history (" + this.playHistory.length + " in stack)");
+                }
+            });
+        }
+
+        // Limit history size
+        if (this.playHistory.length > 50) {
+            this.playHistory.shift();
+        }
+    },
+
+    // Play previous track from history
+    playFromHistory: function () {
+        const entry = this.playHistory.pop();
+        if (!entry) return;
+
+        Log.info("MMM-SoundCloud: Playing from history, type: " + entry.type);
+
+        if (entry.type === "global" && entry.trackUrl) {
+            // Reload a global track
+            this.currentGlobalTrack = entry.trackInfo;
+            this.isPlayingSearched = true;
+
+            this.widget.load(entry.trackUrl, {
+                auto_play: true,
+                show_artwork: this.config.showArtwork,
+                callback: () => {
+                    this.widget.setVolume(this.volume);
+                    Log.info("MMM-SoundCloud: History - loaded global track: " + entry.trackInfo.title);
+                }
+            });
+        } else if (entry.type === "album" && entry.index >= 0) {
+            // Skip to album track index
+            // If we're currently on a global/searched track, reload playlist first
+            if (this.isPlayingSearched) {
+                this.isPlayingSearched = false;
+                const playlistUrl = this.savedPlaylistUrl;
+                this.widget.load(playlistUrl, {
+                    auto_play: true,
+                    show_artwork: this.config.showArtwork,
+                    callback: () => {
+                        setTimeout(() => {
+                            this.widget.skip(entry.index);
+                            this.widget.setVolume(this.volume);
+                            Log.info("MMM-SoundCloud: History - reloaded playlist, skipped to track " + entry.index);
+                        }, 500);
+                    }
+                });
+            } else {
+                this.widget.skip(entry.index);
+                Log.info("MMM-SoundCloud: History - skipped to album track " + entry.index);
+            }
         }
     },
 
