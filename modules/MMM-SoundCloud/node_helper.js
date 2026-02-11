@@ -23,6 +23,10 @@ module.exports = NodeHelper.create({
         if (notification === "SEARCH_TRACK") {
             this.searchTrack(payload.query, payload.savedState);
         }
+
+        if (notification === "SEARCH_RELATED") {
+            this.searchRelatedTracks(payload.trackId, payload.genre, payload.tags, payload.title);
+        }
     },
 
     // Get OAuth access token using client credentials
@@ -83,6 +87,184 @@ module.exports = NodeHelper.create({
         req.end();
     },
 
+    // Search for related/recommended tracks based on genre, tags, or title keywords
+    searchRelatedTracks: function (trackId, genre, tags, title) {
+        console.log("[MMM-SoundCloud] Searching related tracks for: " + title + " (genre: " + genre + ", tags: " + tags + ")");
+
+        this.getAccessToken((err, token) => {
+            if (err) {
+                console.error("[MMM-SoundCloud] Auth error for related search: " + err.message);
+                this.sendSocketNotification("RELATED_TRACKS_RESULT", {
+                    success: false,
+                    error: err.message
+                });
+                return;
+            }
+
+            // Try to find related tracks using the /tracks/{id}/related endpoint first
+            const relatedPath = `/tracks/${trackId}/related?limit=10`;
+
+            const relatedOptions = {
+                hostname: "api.soundcloud.com",
+                port: 443,
+                path: relatedPath,
+                method: "GET",
+                headers: {
+                    "Authorization": "OAuth " + token,
+                    "Accept": "application/json"
+                }
+            };
+
+            const relatedReq = https.request(relatedOptions, (res) => {
+                let data = "";
+                res.on("data", chunk => data += chunk);
+                res.on("end", () => {
+                    try {
+                        const result = JSON.parse(data);
+                        const tracks = result.collection || result || [];
+
+                        if (tracks.length > 0) {
+                            console.log("[MMM-SoundCloud] Found " + tracks.length + " related tracks via /related endpoint");
+
+                            // Filter out the current track and pick a random one from top results
+                            const filtered = tracks.filter(t => t.id !== trackId && t.streamable !== false);
+                            if (filtered.length > 0) {
+                                // Pick a random track from top 5 to add variety
+                                const pickIndex = Math.floor(Math.random() * Math.min(5, filtered.length));
+                                const picked = filtered[pickIndex];
+                                console.log("[MMM-SoundCloud] Picked related track: " + picked.title + " by " + (picked.user ? picked.user.username : "Unknown"));
+
+                                this.sendSocketNotification("RELATED_TRACKS_RESULT", {
+                                    success: true,
+                                    track: {
+                                        id: picked.id,
+                                        title: picked.title,
+                                        artist: picked.user ? picked.user.username : "Unknown",
+                                        permalink_url: picked.permalink_url,
+                                        duration: picked.duration,
+                                        artwork_url: picked.artwork_url,
+                                        genre: picked.genre || "",
+                                        tag_list: picked.tag_list || ""
+                                    }
+                                });
+                                return;
+                            }
+                        }
+
+                        // Fallback: search by genre or tags or title keywords
+                        console.log("[MMM-SoundCloud] /related endpoint returned no usable tracks, falling back to search");
+                        this.fallbackRelatedSearch(token, trackId, genre, tags, title);
+                    } catch (e) {
+                        console.error("[MMM-SoundCloud] Related tracks parse error: " + e.message);
+                        this.fallbackRelatedSearch(token, trackId, genre, tags, title);
+                    }
+                });
+            });
+
+            relatedReq.on("error", (e) => {
+                console.error("[MMM-SoundCloud] Related tracks request error: " + e.message);
+                this.fallbackRelatedSearch(token, trackId, genre, tags, title);
+            });
+
+            relatedReq.end();
+        });
+    },
+
+    // Fallback: search for related tracks by genre, tags, or title keywords
+    fallbackRelatedSearch: function (token, trackId, genre, tags, title) {
+        // Build search query from genre, tags, or title
+        let searchQuery = "";
+        if (genre && genre.trim()) {
+            searchQuery = genre.trim();
+        } else if (tags && tags.trim()) {
+            // Use first few tags
+            searchQuery = tags.split(/[,\s]+/).slice(0, 3).join(" ");
+        } else if (title) {
+            // Extract keywords from title (remove common words)
+            const stopWords = ["official", "music", "video", "mv", "lyric", "lyrics", "audio", "hd", "hq", "ft", "feat", "remix"];
+            searchQuery = title
+                .toLowerCase()
+                .replace(/[^a-z0-9\s\u00C0-\u024F\u1E00-\u1EFF]/g, " ")
+                .split(/\s+/)
+                .filter(w => w.length > 2 && !stopWords.includes(w))
+                .slice(0, 3)
+                .join(" ");
+        }
+
+        if (!searchQuery) searchQuery = "trending music";
+
+        console.log("[MMM-SoundCloud] Fallback related search query: " + searchQuery);
+
+        const encodedQuery = encodeURIComponent(searchQuery);
+        const path = `/tracks?q=${encodedQuery}&access=playable&limit=15`;
+
+        const options = {
+            hostname: "api.soundcloud.com",
+            port: 443,
+            path: path,
+            method: "GET",
+            headers: {
+                "Authorization": "OAuth " + token,
+                "Accept": "application/json"
+            }
+        };
+
+        const req = https.request(options, (res) => {
+            let data = "";
+            res.on("data", chunk => data += chunk);
+            res.on("end", () => {
+                try {
+                    const result = JSON.parse(data);
+                    const tracks = result.collection || result || [];
+                    const filtered = tracks.filter(t => t.id !== trackId && t.streamable !== false);
+
+                    if (filtered.length > 0) {
+                        // Pick a random track from results for variety
+                        const pickIndex = Math.floor(Math.random() * Math.min(8, filtered.length));
+                        const picked = filtered[pickIndex];
+                        console.log("[MMM-SoundCloud] Fallback picked: " + picked.title + " by " + (picked.user ? picked.user.username : "Unknown"));
+
+                        this.sendSocketNotification("RELATED_TRACKS_RESULT", {
+                            success: true,
+                            track: {
+                                id: picked.id,
+                                title: picked.title,
+                                artist: picked.user ? picked.user.username : "Unknown",
+                                permalink_url: picked.permalink_url,
+                                duration: picked.duration,
+                                artwork_url: picked.artwork_url,
+                                genre: picked.genre || "",
+                                tag_list: picked.tag_list || ""
+                            }
+                        });
+                    } else {
+                        console.warn("[MMM-SoundCloud] No related tracks found");
+                        this.sendSocketNotification("RELATED_TRACKS_RESULT", {
+                            success: false,
+                            error: "No related tracks found"
+                        });
+                    }
+                } catch (e) {
+                    console.error("[MMM-SoundCloud] Fallback search parse error: " + e.message);
+                    this.sendSocketNotification("RELATED_TRACKS_RESULT", {
+                        success: false,
+                        error: "Parse error: " + e.message
+                    });
+                }
+            });
+        });
+
+        req.on("error", (e) => {
+            console.error("[MMM-SoundCloud] Fallback search error: " + e.message);
+            this.sendSocketNotification("RELATED_TRACKS_RESULT", {
+                success: false,
+                error: e.message
+            });
+        });
+
+        req.end();
+    },
+
     // Search for tracks using SoundCloud API
     searchTrack: function (query, savedState) {
         console.log("[MMM-SoundCloud] Searching for: " + query);
@@ -140,7 +322,9 @@ module.exports = NodeHelper.create({
                                     permalink_url: bestTrack.permalink_url,
                                     stream_url: bestTrack.stream_url,
                                     duration: bestTrack.duration,
-                                    artwork_url: bestTrack.artwork_url
+                                    artwork_url: bestTrack.artwork_url,
+                                    genre: bestTrack.genre || "",
+                                    tag_list: bestTrack.tag_list || ""
                                 },
                                 savedState: savedState
                             });

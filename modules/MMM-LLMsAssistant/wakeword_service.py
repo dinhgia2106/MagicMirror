@@ -241,6 +241,7 @@ class PvRecorderMicrophone:
         speech_started = False
         start_time = time.time()
         speech_start_time = None
+        hard_timeout = 20  # Absolute max seconds to prevent infinite hang
         
         # Reset VAD and energy state for new listening session
         self._reset_vad_state()
@@ -250,6 +251,13 @@ class PvRecorderMicrophone:
         window_size = 3     # Smooth over 3 frames (~96ms at 512 frame_length)
         
         while True:
+            # Hard safety timeout - prevent infinite hang regardless of state
+            total_elapsed = time.time() - start_time
+            if total_elapsed > hard_timeout:
+                if speech_started and audio_buffer:
+                    break  # Return whatever audio we have
+                raise sr.WaitTimeoutError("Listening hard timeout reached")
+            
             # Check timeout (no speech detected yet)
             elapsed = time.time() - start_time
             if timeout and not speech_started and elapsed > timeout:
@@ -685,6 +693,8 @@ class WakeWordService:
     def conversation_loop(self):
         """Main conversation loop - continues until reset condition met"""
         self.emit("debug", message="Starting conversation loop")
+        consecutive_errors = 0
+        max_consecutive_errors = 2
         
         while self.conversation.is_active:
             try:
@@ -730,6 +740,7 @@ class WakeWordService:
                         continue  # Try listening again
                     
                     # Valid input - process it
+                    consecutive_errors = 0  # Reset on valid input
                     self.emit("speech", text=text)
                     self.conversation.add_user_message(text)
                     
@@ -773,14 +784,21 @@ class WakeWordService:
                     
                 except sr.UnknownValueError:
                     # Could not understand - treat as noise
+                    consecutive_errors += 1
                     self.conversation.increment_noise()
                     if self.conversation.should_end_due_to_noise():
                         self.emit("noise_timeout")
                         break
+                    if consecutive_errors >= max_consecutive_errors:
+                        self.emit("debug", message="Too many consecutive errors, ending conversation")
+                        break
                     # Otherwise continue listening
                         
             except Exception as e:
+                consecutive_errors += 1
                 self.emit("error", message=str(e))
+                if consecutive_errors >= max_consecutive_errors:
+                    self.emit("debug", message="Too many consecutive errors, ending conversation")
                 break
         
         # Restore music volume when conversation ends
@@ -1260,7 +1278,7 @@ QUY TAC PHAN HOI:
                     retry_response = chat.send_message(text)
                     # Check for function calls in retry
                     retry_fc = []
-                    if retry_response.candidates and retry_response.candidates[0].content:
+                    if retry_response.candidates and retry_response.candidates[0].content and retry_response.candidates[0].content.parts:
                         for part in retry_response.candidates[0].content.parts:
                             if hasattr(part, 'function_call') and part.function_call:
                                 retry_fc.append(part.function_call)
@@ -1300,8 +1318,16 @@ QUY TAC PHAN HOI:
                         self.emit("debug", message=f"Retry succeeded: text len={len(full_text)}")
                     else:
                         self.emit("debug", message="WARNING: Retry also returned no response")
+                        full_text = "Xin lỗi, tôi không nhận được phản hồi. Bạn thử lại nhé."
+                        clean_text = self.clean_text_for_tts(full_text)
+                        self.emit("llm_response", text=clean_text)
+                        self.tts_queue.put(clean_text)
                 except Exception as retry_err:
                     self.emit("debug", message=f"Retry error: {retry_err}")
+                    full_text = "Xin lỗi, có lỗi xảy ra. Bạn thử lại nhé."
+                    clean_text = self.clean_text_for_tts(full_text)
+                    self.emit("llm_response", text=clean_text)
+                    self.tts_queue.put(clean_text)
             
             return full_text, music_tool_called
 

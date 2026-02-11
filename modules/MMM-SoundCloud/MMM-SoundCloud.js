@@ -32,6 +32,11 @@ Module.register("MMM-SoundCloud", {
         this.shuffleQueue = [];      // Queue of unplayed track indices
         this.totalTracks = 0;        // Total number of tracks in playlist
 
+        // Play mode: "album" = return to playlist after search, "global" = auto-play related tracks
+        this.playMode = "album";
+        this.globalTrackHistory = [];     // Track IDs played in global mode to avoid repeats
+        this.currentGlobalTrack = null;   // Current track info for finding related tracks
+
         // Search and play state - for returning after searched song finishes
         this.isPlayingSearched = false;   // Flag when playing a searched song
         this.savedTrackIndex = -1;         // Original track index to return to
@@ -43,10 +48,6 @@ Module.register("MMM-SoundCloud", {
         // Volume control during AI conversation
         this.isConversationActive = false;  // Flag when AI conversation is active
         this.pendingVolume = null;           // Volume to apply when conversation ends
-
-        // Audio visualizer
-        this.visualizerBars = [];
-        this.visualizerInterval = null;
     },
 
     getDom: function () {
@@ -69,50 +70,43 @@ Module.register("MMM-SoundCloud", {
         const playerUI = document.createElement("div");
         playerUI.className = "player-ui";
 
-        // Track info row with scrollable text
-        const trackRow = document.createElement("div");
-        trackRow.className = "track-row scrollable-text";
-        trackRow.id = "track-row";
+        // Artwork disc display (top)
+        const artworkContainer = document.createElement("div");
+        artworkContainer.className = "artwork-container" + (this.isPaused ? "" : " spinning");
+        artworkContainer.id = "artwork-container";
 
-        const trackName = document.createElement("span");
-        trackName.className = "track-name scroll-content";
-        trackName.id = "track-name";
-        trackName.textContent = this.currentTrack ? this.currentTrack.title : "Loading...";
-        trackRow.appendChild(trackName);
+        const artworkImg = document.createElement("img");
+        artworkImg.className = "artwork-img";
+        artworkImg.id = "artwork-img";
+        artworkImg.src = (this.currentTrack && this.currentTrack.artwork_url) 
+            ? this.currentTrack.artwork_url.replace("-large", "-t300x300") 
+            : "";
+        artworkImg.alt = "";
+        artworkImg.style.display = artworkImg.src ? "block" : "none";
+        artworkContainer.appendChild(artworkImg);
 
-        this.setupScrollableText(trackRow);
-        playerUI.appendChild(trackRow);
+        // Disc center hole overlay
+        const discCenter = document.createElement("div");
+        discCenter.className = "disc-center";
+        artworkContainer.appendChild(discCenter);
 
-        // Artist row with scrollable text
-        const artistRow = document.createElement("div");
-        artistRow.className = "artist-name scrollable-text";
-        artistRow.id = "artist-row";
+        playerUI.appendChild(artworkContainer);
 
-        const artistName = document.createElement("span");
-        artistName.className = "scroll-content";
-        artistName.id = "artist-name";
-        artistName.textContent = this.currentTrack ? this.currentTrack.user.username : "";
-        artistRow.appendChild(artistName);
+        // Single-line track info: "Track Name - Artist" (below disc)
+        const trackInfoRow = document.createElement("div");
+        trackInfoRow.className = "track-info-row scrollable-text";
+        trackInfoRow.id = "track-info-row";
 
-        this.setupScrollableText(artistRow);
-        playerUI.appendChild(artistRow);
+        const trackInfoContent = document.createElement("span");
+        trackInfoContent.className = "track-info-content scroll-content";
+        trackInfoContent.id = "track-info-content";
+        const trackTitle = this.currentTrack ? this.currentTrack.title : "Loading...";
+        const artistText = (this.currentTrack && this.currentTrack.user) ? this.currentTrack.user.username : "";
+        trackInfoContent.textContent = artistText ? (trackTitle + "  ·  " + artistText) : trackTitle;
+        trackInfoRow.appendChild(trackInfoContent);
 
-        // Audio Visualizer
-        const visualizer = document.createElement("div");
-        visualizer.className = "audio-visualizer";
-        visualizer.id = "audio-visualizer";
-
-        // Create 30 bars
-        const barCount = 45;
-        this.visualizerBars = [];
-        for (let i = 0; i < barCount; i++) {
-            const bar = document.createElement("div");
-            bar.className = "visualizer-bar";
-            bar.style.height = "4px";
-            visualizer.appendChild(bar);
-            this.visualizerBars.push(bar);
-        }
-        playerUI.appendChild(visualizer);
+        this.setupScrollableText(trackInfoRow);
+        playerUI.appendChild(trackInfoRow);
 
         // Bottom section - contains progress, time and controls
         const bottomSection = document.createElement("div");
@@ -225,6 +219,35 @@ Module.register("MMM-SoundCloud", {
         controlsRow.appendChild(shuffleBtn);
 
         bottomSection.appendChild(controlsRow);
+
+        // Play Mode Toggle (Album / Global)
+        const modeRow = document.createElement("div");
+        modeRow.className = "mode-toggle-row";
+
+        const modeLabel = document.createElement("span");
+        modeLabel.className = "mode-label" + (this.playMode === "album" ? " active" : "");
+        modeLabel.id = "mode-label-album";
+        modeLabel.textContent = "Album";
+        modeRow.appendChild(modeLabel);
+
+        const toggleSwitch = document.createElement("div");
+        toggleSwitch.className = "mode-toggle-switch" + (this.playMode === "global" ? " global" : "");
+        toggleSwitch.id = "mode-toggle";
+        toggleSwitch.onclick = () => this.togglePlayMode();
+
+        const toggleKnob = document.createElement("div");
+        toggleKnob.className = "mode-toggle-knob";
+        toggleSwitch.appendChild(toggleKnob);
+        modeRow.appendChild(toggleSwitch);
+
+        const globalLabel = document.createElement("span");
+        globalLabel.className = "mode-label" + (this.playMode === "global" ? " active" : "");
+        globalLabel.id = "mode-label-global";
+        globalLabel.textContent = "Global";
+        modeRow.appendChild(globalLabel);
+
+        bottomSection.appendChild(modeRow);
+
         playerUI.appendChild(bottomSection);
 
         wrapper.appendChild(playerUI);
@@ -259,42 +282,30 @@ Module.register("MMM-SoundCloud", {
     },
 
 
-    // Start audio visualizer animation
-    startVisualizer: function () {
-        if (this.visualizerInterval) return;
-
-        this.visualizerInterval = setInterval(() => {
-            if (this.isPaused) {
-                // When paused, bars go low
-                this.visualizerBars.forEach(bar => {
-                    bar.style.height = '4px';
-                });
-                return;
+    // Update disc spinning animation
+    updateDiscAnimation: function (playing) {
+        const container = document.getElementById("artwork-container");
+        if (container) {
+            if (playing) {
+                container.classList.add("spinning");
+            } else {
+                container.classList.remove("spinning");
             }
-
-            // Simulate audio intensity with random heights
-            this.visualizerBars.forEach((bar, index) => {
-                // Create wave pattern from center
-                const centerIndex = this.visualizerBars.length / 2;
-                const distFromCenter = Math.abs(index - centerIndex) / centerIndex;
-                const baseHeight = (1 - distFromCenter * 0.5) * 80;
-                const randomFactor = Math.random() * 40;
-                const height = Math.max(4, baseHeight + randomFactor - 20);
-                bar.style.height = height + 'px';
-            });
-        }, 100);
+        }
     },
 
-    // Stop audio visualizer animation
-    stopVisualizer: function () {
-        if (this.visualizerInterval) {
-            clearInterval(this.visualizerInterval);
-            this.visualizerInterval = null;
+    // Update artwork image
+    updateArtwork: function (artworkUrl) {
+        const img = document.getElementById("artwork-img");
+        if (img) {
+            if (artworkUrl) {
+                img.src = artworkUrl.replace("-large", "-t300x300");
+                img.style.display = "block";
+            } else {
+                img.src = "";
+                img.style.display = "none";
+            }
         }
-        // Reset bars to minimum height
-        this.visualizerBars.forEach(bar => {
-            bar.style.height = '4px';
-        });
     },
 
     formatTime: function (ms) {
@@ -400,6 +411,14 @@ Module.register("MMM-SoundCloud", {
                     Log.warn("MMM-SoundCloud: MUSIC_SEARCH_PLAY missing song_name in payload");
                 }
                 break;
+            case "MUSIC_SET_MODE":
+                if (payload && payload.mode) {
+                    if (payload.mode !== this.playMode) {
+                        this.togglePlayMode();
+                    }
+                    Log.info("MMM-SoundCloud: Mode set to " + this.playMode);
+                }
+                break;
             case "DOM_OBJECTS_CREATED":
                 this.initWidget();
                 // Send config to node_helper for API access
@@ -412,6 +431,9 @@ Module.register("MMM-SoundCloud", {
     socketNotificationReceived: function (notification, payload) {
         if (notification === "SEARCH_RESULT") {
             this.handleSearchResult(payload);
+        }
+        if (notification === "RELATED_TRACKS_RESULT") {
+            this.handleRelatedTrackResult(payload);
         }
     },
 
@@ -444,13 +466,13 @@ Module.register("MMM-SoundCloud", {
         this.widget.bind(SC.Widget.Events.PLAY, () => {
             this.isPaused = false;
             this.updatePlayStatus();
-            this.startVisualizer();
+            this.updateDiscAnimation(true);
         });
 
         this.widget.bind(SC.Widget.Events.PAUSE, () => {
             this.isPaused = true;
             this.updatePlayStatus();
-            this.stopVisualizer();
+            this.updateDiscAnimation(false);
         });
 
         this.widget.bind(SC.Widget.Events.PLAY_PROGRESS, (data) => {
@@ -463,9 +485,17 @@ Module.register("MMM-SoundCloud", {
 
         this.widget.bind(SC.Widget.Events.FINISH, () => {
             // Track finished
-            if (this.isPlayingSearched) {
-                // Was playing a searched song - return to previous position
+            if (this.isPlayingSearched && this.playMode === "global") {
+                // Global mode: find and play related tracks instead of returning
+                Log.info("MMM-SoundCloud: Global mode - searching for related track");
+                this.playNextRelatedTrack();
+            } else if (this.isPlayingSearched) {
+                // Album mode: return to previous position
                 this.returnToSavedTrack();
+            } else if (this.playMode === "global" && this.currentGlobalTrack) {
+                // Global mode active and we have track context - keep going
+                Log.info("MMM-SoundCloud: Global mode - continuing with related tracks");
+                this.playNextRelatedTrack();
             } else if (this.isShuffled) {
                 // In shuffle mode, play a random track
                 this.playRandomTrack();
@@ -485,53 +515,49 @@ Module.register("MMM-SoundCloud", {
                 this.currentTrack = sound;
                 this.duration = sound.duration || 0;
 
-                const trackNameEl = document.getElementById("track-name");
-                const artistNameEl = document.getElementById("artist-name");
+                const trackInfoEl = document.getElementById("track-info-content");
+                const trackInfoRow = document.getElementById("track-info-row");
                 const totalTimeEl = document.getElementById("total-time");
-                const trackRow = document.getElementById("track-row");
-                const artistRow = document.getElementById("artist-row");
 
-                if (trackNameEl) {
-                    // Reset scroll state for new track
-                    trackNameEl.dataset.duplicated = '';
-                    trackNameEl.textContent = sound.title || "Unknown";
-                    if (trackRow) {
-                        trackRow.classList.remove('scrolling');
-                        // Recheck overflow
+                if (trackInfoEl) {
+                    // Build single-line: "Track  ·  Artist"
+                    const title = sound.title || "Unknown";
+                    const artist = sound.user ? sound.user.username : "";
+                    const infoText = artist ? (title + "  ·  " + artist) : title;
+
+                    // Reset scroll state
+                    trackInfoEl.dataset.duplicated = '';
+                    trackInfoEl.textContent = infoText;
+                    if (trackInfoRow) {
+                        trackInfoRow.classList.remove('scrolling');
                         setTimeout(() => {
-                            const isOverflowing = trackNameEl.scrollWidth > trackRow.clientWidth;
+                            const isOverflowing = trackInfoEl.scrollWidth > trackInfoRow.clientWidth;
                             if (isOverflowing) {
-                                if (!trackNameEl.dataset.duplicated) {
-                                    const originalText = trackNameEl.textContent;
-                                    trackNameEl.textContent = originalText + '          ' + originalText;
-                                    trackNameEl.dataset.duplicated = 'true';
+                                if (!trackInfoEl.dataset.duplicated) {
+                                    const originalText = trackInfoEl.textContent;
+                                    trackInfoEl.textContent = originalText + '          ' + originalText;
+                                    trackInfoEl.dataset.duplicated = 'true';
                                 }
-                                trackRow.classList.add('scrolling');
-                            }
-                        }, 200);
-                    }
-                }
-                if (artistNameEl) {
-                    // Reset scroll state for new artist
-                    artistNameEl.dataset.duplicated = '';
-                    artistNameEl.textContent = sound.user ? sound.user.username : "";
-                    if (artistRow) {
-                        artistRow.classList.remove('scrolling');
-                        // Recheck overflow
-                        setTimeout(() => {
-                            const isOverflowing = artistNameEl.scrollWidth > artistRow.clientWidth;
-                            if (isOverflowing) {
-                                if (!artistNameEl.dataset.duplicated) {
-                                    const originalText = artistNameEl.textContent;
-                                    artistNameEl.textContent = originalText + '          ' + originalText;
-                                    artistNameEl.dataset.duplicated = 'true';
-                                }
-                                artistRow.classList.add('scrolling');
+                                trackInfoRow.classList.add('scrolling');
                             }
                         }, 200);
                     }
                 }
                 if (totalTimeEl) totalTimeEl.textContent = this.formatTime(this.duration);
+
+                // Update artwork
+                this.updateArtwork(sound.artwork_url);
+
+                // Update global track info if in global mode
+                if (this.playMode === "global") {
+                    this.currentGlobalTrack = {
+                        id: sound.id,
+                        title: sound.title || "",
+                        artist: sound.user ? sound.user.username : "",
+                        genre: sound.genre || "",
+                        tag_list: sound.tag_list || ""
+                    };
+                }
 
                 // Broadcast track change
                 this.sendNotification("MUSIC_TRACK_CHANGED", {
@@ -589,7 +615,12 @@ Module.register("MMM-SoundCloud", {
 
     next: function () {
         if (this.widget && this.widgetReady) {
-            // If playing a searched song from outside playlist, return to original
+            if (this.playMode === "global" && (this.isPlayingSearched || this.currentGlobalTrack)) {
+                // Global mode: skip to next related track
+                this.playNextRelatedTrack();
+                return;
+            }
+            // Album mode: if playing searched song, return to album
             if (this.isPlayingSearched) {
                 this.returnToSavedTrack();
                 return;
@@ -604,7 +635,15 @@ Module.register("MMM-SoundCloud", {
 
     prev: function () {
         if (this.widget && this.widgetReady) {
-            // If playing a searched song from outside playlist, return to original
+            // In global mode with search, restart current track or go back
+            if (this.playMode === "global" && this.isPlayingSearched) {
+                // If past 3 seconds, restart; otherwise ignore (no history stack)
+                if (this.currentPosition > 3000) {
+                    this.widget.seekTo(0);
+                }
+                return;
+            }
+            // Album mode: if playing searched song, return to album
             if (this.isPlayingSearched) {
                 this.returnToSavedTrack();
                 return;
@@ -902,8 +941,8 @@ Module.register("MMM-SoundCloud", {
             Log.info("MMM-SoundCloud: Loading track: " + payload.track.title + " by " + payload.track.artist);
             Log.info("MMM-SoundCloud: Track URL: " + trackUrl);
 
-            // Store saved state for returning later
-            if (payload.savedState) {
+            // Store saved state for returning later (only in album mode)
+            if (payload.savedState && this.playMode === "album") {
                 this.savedTrackIndex = payload.savedState.trackIndex;
                 this.savedPosition = payload.savedState.position;
                 this.savedIsPaused = payload.savedState.isPaused;
@@ -911,6 +950,21 @@ Module.register("MMM-SoundCloud", {
             }
 
             this.isPlayingSearched = true;
+
+            // Store track info for global mode related searches
+            this.currentGlobalTrack = {
+                id: payload.track.id,
+                title: payload.track.title,
+                artist: payload.track.artist,
+                genre: payload.track.genre || "",
+                tag_list: payload.track.tag_list || ""
+            };
+
+            // In global mode, reset history for new search session
+            if (this.playMode === "global") {
+                this.globalTrackHistory = [];
+            }
+            this.globalTrackHistory.push(payload.track.id);
 
             // Load the track into the widget
             this.widget.load(trackUrl, {
@@ -1112,12 +1166,134 @@ Module.register("MMM-SoundCloud", {
         });
     },
 
+    // Toggle between Album and Global play mode
+    togglePlayMode: function () {
+        this.playMode = this.playMode === "album" ? "global" : "album";
+
+        // Update toggle UI
+        const toggle = document.getElementById("mode-toggle");
+        const albumLabel = document.getElementById("mode-label-album");
+        const globalLabel = document.getElementById("mode-label-global");
+
+        if (toggle) {
+            if (this.playMode === "global") {
+                toggle.classList.add("global");
+            } else {
+                toggle.classList.remove("global");
+            }
+        }
+        if (albumLabel) {
+            albumLabel.classList.toggle("active", this.playMode === "album");
+        }
+        if (globalLabel) {
+            globalLabel.classList.toggle("active", this.playMode === "global");
+        }
+
+        // Reset global history when switching to album mode
+        if (this.playMode === "album") {
+            this.globalTrackHistory = [];
+            this.currentGlobalTrack = null;
+        }
+
+        Log.info("MMM-SoundCloud: Play mode switched to " + this.playMode);
+        this.sendNotification("MUSIC_MODE_CHANGED", { playMode: this.playMode });
+    },
+
+    // Request next related track in global mode
+    playNextRelatedTrack: function () {
+        if (!this.currentGlobalTrack) {
+            Log.warn("MMM-SoundCloud: No current track info for related search");
+            // Fallback to album behavior
+            if (this.isPlayingSearched) {
+                this.returnToSavedTrack();
+            }
+            return;
+        }
+
+        // Also try to get genre/tags from current widget sound
+        if (this.widget) {
+            this.widget.getCurrentSound((sound) => {
+                const trackInfo = {
+                    trackId: this.currentGlobalTrack.id,
+                    genre: (sound && sound.genre) || this.currentGlobalTrack.genre || "",
+                    tags: (sound && sound.tag_list) || this.currentGlobalTrack.tag_list || "",
+                    title: this.currentGlobalTrack.title || ""
+                };
+
+                Log.info("MMM-SoundCloud: Requesting related track for: " + trackInfo.title + " (genre: " + trackInfo.genre + ")");
+                this.sendSocketNotification("SEARCH_RELATED", trackInfo);
+            });
+        }
+    },
+
+    // Handle related track result from node_helper
+    handleRelatedTrackResult: function (payload) {
+        if (payload.success && payload.track) {
+            // Check if we already played this track recently
+            if (this.globalTrackHistory.includes(payload.track.id)) {
+                Log.info("MMM-SoundCloud: Related track already played, requesting another");
+                // Request another one (will get a different random pick)
+                if (this.globalTrackHistory.length < 50) {
+                    this.playNextRelatedTrack();
+                } else {
+                    // Too many tracks played, reset history
+                    this.globalTrackHistory = [];
+                    this.playNextRelatedTrack();
+                }
+                return;
+            }
+
+            const trackUrl = payload.track.permalink_url;
+            Log.info("MMM-SoundCloud: Global mode - playing related: " + payload.track.title + " by " + payload.track.artist);
+
+            // Update current global track info for next chain
+            this.currentGlobalTrack = {
+                id: payload.track.id,
+                title: payload.track.title,
+                artist: payload.track.artist,
+                genre: payload.track.genre || "",
+                tag_list: payload.track.tag_list || ""
+            };
+            this.globalTrackHistory.push(payload.track.id);
+
+            // Keep isPlayingSearched true so global mode continues chaining
+            this.isPlayingSearched = true;
+
+            // Load the related track into widget
+            this.widget.load(trackUrl, {
+                auto_play: true,
+                show_artwork: this.config.showArtwork,
+                callback: () => {
+                    Log.info("MMM-SoundCloud: Related track loaded successfully");
+                    this.widget.setVolume(this.volume);
+
+                    this.sendNotification("MUSIC_TRACK_CHANGED", {
+                        title: payload.track.title,
+                        artist: payload.track.artist,
+                        artwork: payload.track.artwork_url,
+                        source: "global-related"
+                    });
+                }
+            });
+        } else {
+            Log.warn("MMM-SoundCloud: No related track found, returning to playlist");
+            // No related tracks found - fall back to album behavior
+            if (this.isPlayingSearched) {
+                this.returnToSavedTrack();
+            } else {
+                this.isPaused = true;
+                this.updatePlayStatus();
+            }
+        }
+    },
+
     // Get current state for LLM
     getState: function () {
         return {
             isPaused: this.isPaused,
             volume: this.volume,
             isShuffled: this.isShuffled,
+            playMode: this.playMode,
             track: this.currentTrack ? {
                 title: this.currentTrack.title,
                 artist: this.currentTrack.user ? this.currentTrack.user.username : ""

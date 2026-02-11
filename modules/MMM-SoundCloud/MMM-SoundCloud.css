@@ -1,11 +1,9 @@
 /* MMM-SoundCloud Styles - Minimalist Design */
 .soundcloud-player {
     width: 350px;
-    padding: 12px 0;
-    margin-top: 8px;
+    padding: 8px 0;
     display: flex;
     flex-direction: column;
-    min-height: 280px;
 }
 
 /* Hide the SoundCloud iframe */
@@ -49,19 +47,65 @@
     }
 }
 
-/* Track name */
-.track-name {
-    font-size: 18px;
-    font-weight: 400;
-    color: rgba(255, 255, 255, 0.9);
-    margin-bottom: 4px;
+/* Artwork disc container */
+.artwork-container {
+    width: 180px;
+    height: 180px;
+    margin: 0 auto 6px auto;
+    position: relative;
+    border-radius: 50%;
+    overflow: hidden;
+    background: radial-gradient(circle, rgba(40,40,40,1) 0%, rgba(20,20,20,1) 100%);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4), inset 0 0 0 3px rgba(255, 255, 255, 0.06);
+    border: 3px solid rgba(255, 255, 255, 0.08);
+    /* Always apply animation, control with play-state */
+    animation: disc-spin 8s linear infinite;
+    animation-play-state: paused;
 }
 
-/* Artist name */
-.artist-name {
+.artwork-container.spinning {
+    animation-play-state: running;
+}
+
+.artwork-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+    aspect-ratio: 1 / 1;
+}
+
+/* Disc center - small dot only */
+.disc-center {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 12px;
+    height: 12px;
+    background: rgba(20, 20, 20, 0.9);
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.15);
+    pointer-events: none;
+    z-index: 2;
+}
+
+@keyframes disc-spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* Track info - single line below disc */
+.track-info-row {
+    text-align: center;
+    margin-bottom: 6px;
+}
+
+.track-info-content {
     font-size: 14px;
-    color: rgba(255, 255, 255, 0.4);
-    margin-bottom: 12px;
+    font-weight: 400;
+    color: rgba(255, 255, 255, 0.75);
+    white-space: nowrap;
 }
 
 /* Progress bar container */
@@ -70,7 +114,7 @@
     height: 4px;
     background: rgba(255, 255, 255, 0.1);
     border-radius: 2px;
-    margin-bottom: 6px;
+    margin-bottom: 4px;
     cursor: pointer;
     transition: height 0.15s ease;
 }
@@ -101,32 +145,11 @@
     justify-content: space-between;
     font-size: 12px;
     color: rgba(255, 255, 255, 0.3);
-    margin-bottom: 8px;
+    margin-bottom: 4px;
 }
 
-/* Audio Visualizer */
-.audio-visualizer {
-    display: flex;
-    justify-content: center;
-    align-items: flex-end;
-    gap: 3px;
-    width: 90%;
-    height: 100px;
-    margin: 0 auto 12px auto;
-    pointer-events: none;
-}
-
-.visualizer-bar {
-    width: 4px;
-    min-height: 4px;
-    background: linear-gradient(to top, rgba(255, 85, 0, 0.8), rgba(255, 170, 100, 0.6));
-    border-radius: 2px;
-    transition: height 0.05s ease-out;
-}
-
-/* Bottom section - push to bottom */
+/* Bottom section */
 .bottom-section {
-    margin-top: auto;
     position: relative;
     z-index: 10;
 }
@@ -136,7 +159,7 @@
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: 20px;
+    gap: 16px;
 }
 
 /* Control buttons - minimal */
@@ -271,4 +294,73 @@
 
 .shuffle-btn.active:hover {
     color: #ff5500;
+}
+
+/* Play Mode Toggle Row */
+.mode-toggle-row {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+/* Mode labels */
+.mode-label {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.25);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    transition: color 0.3s ease;
+    user-select: none;
+    min-width: 42px;
+    text-align: center;
+}
+
+.mode-label.active {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+/* Toggle switch */
+.mode-toggle-switch {
+    width: 40px;
+    height: 20px;
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 10px;
+    cursor: pointer;
+    position: relative;
+    transition: background 0.3s ease;
+    flex-shrink: 0;
+}
+
+.mode-toggle-switch:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.mode-toggle-switch.global {
+    background: rgba(255, 85, 0, 0.5);
+}
+
+.mode-toggle-switch.global:hover {
+    background: rgba(255, 85, 0, 0.65);
+}
+
+/* Toggle knob */
+.mode-toggle-knob {
+    width: 16px;
+    height: 16px;
+    background: rgba(255, 255, 255, 0.85);
+    border-radius: 50%;
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    transition: left 0.3s ease, background 0.3s ease;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.mode-toggle-switch.global .mode-toggle-knob {
+    left: 22px;
+    background: #ffffff;
 }
