@@ -373,6 +373,7 @@ class WakeWordService:
         self.recorder = None
         self.recognizer = sr.Recognizer()
         self.microphone = None  # Will be initialized in start()
+        self.streaming_player = None  # Detected in start() for low-latency TTS
         
         # Speech recognition tuning - matched to PvRecorderMicrophone VAD settings
         # These are backup settings; primary VAD is in PvRecorderMicrophone
@@ -448,7 +449,24 @@ class WakeWordService:
         """Reset TTS state for new conversation"""
         self.stop_current_tts()
         self.stop_tts_flag.clear()
-        
+
+    def _detect_streaming_player(self):
+        """Detect if a streaming-capable audio player is available.
+        Returns command list for Popen if found, None otherwise."""
+        # Try mpv first (best stdin streaming support)
+        try:
+            subprocess.run(["mpv", "--version"], capture_output=True, timeout=5)
+            return ["mpv", "--no-terminal", "--no-video", "--demuxer=lavf", "-"]
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        # Try ffplay as fallback
+        try:
+            subprocess.run(["ffplay", "-version"], capture_output=True, timeout=5)
+            return ["ffplay", "-nodisp", "-autoexit", "-i", "pipe:0"]
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+        return None
+
     def emit(self, event_type, **kwargs):
         """Emit JSON event to stdout for Node.js - uses base64 for text to avoid Windows encoding issues"""
         import base64
@@ -497,6 +515,13 @@ class WakeWordService:
                 self.recorder.start()  # Restart wake word recorder
             except Exception as e:
                 print(f"Ambient noise adjustment warning: {e}", file=sys.stderr)
+            
+            # Detect streaming-capable audio player for low-latency TTS
+            self.streaming_player = self._detect_streaming_player()
+            if self.streaming_player:
+                print(f"Streaming TTS enabled with: {self.streaming_player[0]}", file=sys.stderr)
+            else:
+                print("Streaming TTS not available, using file-based TTS", file=sys.stderr)
             
             print(f"Listening for wake word... (sample rate: {self.porcupine.sample_rate})", file=sys.stderr)
             
@@ -813,13 +838,78 @@ class WakeWordService:
         except:
             pass
     
+    def stream_tts_to_player(self, text):
+        """
+        Stream TTS audio directly to player via stdin pipe.
+        Eliminates intermediate file I/O for ~1-3s latency reduction.
+        Returns True if successful, False if fallback to file-based needed.
+        """
+        if not text or not self.streaming_player or self.stop_tts_flag.is_set():
+            return False
+        
+        import asyncio
+        
+        async def _stream():
+            try:
+                import edge_tts
+                communicate = edge_tts.Communicate(text, self.voice_id)
+                
+                self.current_tts_process = subprocess.Popen(
+                    self.streaming_player,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL
+                )
+                
+                async for chunk in communicate.stream():
+                    if self.stop_tts_flag.is_set():
+                        break
+                    if chunk["type"] == "audio":
+                        try:
+                            self.current_tts_process.stdin.write(chunk["data"])
+                        except (BrokenPipeError, OSError):
+                            break
+                
+                if self.current_tts_process:
+                    try:
+                        self.current_tts_process.stdin.close()
+                    except (BrokenPipeError, OSError):
+                        pass
+                    try:
+                        self.current_tts_process.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        self.current_tts_process.terminate()
+                    self.current_tts_process = None
+                
+                return True
+            except Exception as e:
+                self.emit("error", message=f"TTS streaming error: {e}")
+                if self.current_tts_process:
+                    try:
+                        self.current_tts_process.terminate()
+                    except:
+                        pass
+                    self.current_tts_process = None
+                return False
+        
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(_stream())
+        finally:
+            try:
+                loop.close()
+            except:
+                pass
+        
+        return result
+
     def process_phases_async(self, text):
         """
-        Process text with phase-based async TTS pipeline:
-        1. Split text into phases (~20 words each, keeping sentences whole)
-        2. Generate TTS for phase 1
-        3. While playing phase 1, generate remaining phases asynchronously
-        4. Play phases seamlessly one after another
+        Hybrid streaming + pre-generation TTS pipeline:
+        - Phase 1: Stream directly to player via stdin (~200ms to first audio)
+        - Remaining phases: Pre-generate as files while phase 1 plays
+        - Falls back to file-based approach if streaming not available
         """
         if self.stop_tts_flag.is_set():
             return
@@ -829,41 +919,43 @@ class WakeWordService:
         if not phases:
             return
         
-        self.emit("debug", message=f"Split into {len(phases)} phases")
+        has_streaming = bool(self.streaming_player)
+        self.emit("debug", message=f"TTS: {len(phases)} phase(s), streaming={'yes' if has_streaming else 'no'}")
         
+        # === Single phase: try streaming first ===
         if len(phases) == 1:
-            # Only one phase, no need for async
+            if has_streaming:
+                success = self.stream_tts_to_player(phases[0])
+                if success:
+                    return
+            # Fallback to file-based
             audio_path = self.generate_tts_audio(phases[0])
             if audio_path and not self.stop_tts_flag.is_set():
                 self.play_audio_file(audio_path)
             return
         
-        # Generate phase 1 first
-        phase1_audio = self.generate_tts_audio(phases[0])
-        
-        if self.stop_tts_flag.is_set():
-            if phase1_audio:
-                try:
-                    os.unlink(phase1_audio)
-                except:
-                    pass
-            return
-        
-        # Start generating remaining phases asynchronously
+        # === Multi-phase: stream phase 1 + pre-generate remaining ===
         remaining_phases = phases[1:]
         future_audios = []
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-            # Submit all remaining phases for generation
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            # Pre-generate remaining phases as files in background
             for phase_text in remaining_phases:
                 future = executor.submit(self.generate_tts_audio, phase_text)
                 future_audios.append(future)
             
-            # Play phase 1 while others generate in background
-            if phase1_audio and not self.stop_tts_flag.is_set():
-                self.play_audio_file(phase1_audio)
+            # Phase 1: stream directly for near-instant playback
+            phase1_played = False
+            if has_streaming:
+                phase1_played = self.stream_tts_to_player(phases[0])
             
-            # Play remaining phases as they complete (in order)
+            if not phase1_played:
+                # Fallback: generate file for phase 1
+                audio_path = self.generate_tts_audio(phases[0])
+                if audio_path and not self.stop_tts_flag.is_set():
+                    self.play_audio_file(audio_path)
+            
+            # Play remaining pre-generated phases (should be ready by now)
             for future in future_audios:
                 if self.stop_tts_flag.is_set():
                     # Cancel remaining and cleanup
@@ -1175,7 +1267,14 @@ QUY TAC PHAN HOI:
             return f"Error: {str(e)}"
             
     def speak(self, text):
-        """Text-to-speech using edge-tts (cross-platform compatible)"""
+        """Text-to-speech - uses streaming if available, otherwise file-based"""
+        # Try direct streaming first for lower latency
+        if self.streaming_player:
+            success = self.stream_tts_to_player(text)
+            if success:
+                return
+        
+        # Fallback to file-based TTS
         import asyncio
         
         async def stream_tts():
