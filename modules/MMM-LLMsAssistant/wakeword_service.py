@@ -486,6 +486,11 @@ class WakeWordService:
         self.tts_thread = threading.Thread(target=self._process_tts_queue, daemon=True)
         self.tts_thread.start()        
         
+        # Wake word interrupt during TTS/LLM response
+        self.interrupted_by_wakeword = threading.Event()
+        self._wakeword_monitor_stop = threading.Event()
+        self._wakeword_monitor_thread = None
+        
         self.agent_tools = AgentTools({
             "holiday_api_url": "http://127.0.0.1:8000/api/holidays",
             "lat": 16.463713,
@@ -501,7 +506,25 @@ class WakeWordService:
             "2. Sử dụng các công cụ (tools) ĐƯỢC CUNG CẤP để tra cứu thời gian, thời tiết, ngày lễ, điều khiển nhạc KHI CẦN THIẾT.\n"
             "3. Giải đáp thắc mắc, tư vấn và hỗ trợ mọi vấn đề trong cuộc sống.\n"
             "LƯU Ý: Bạn KHÔNG bị giới hạn chỉ trong các công cụ trên. Hãy thoải mái dạy ngoại ngữ, kể chuyện, làm thơ, hoặc thảo luận bất kỳ chủ đề nào người dùng muốn.\n"
-            "Hãy trả lời một cách tự nhiên, ngắn gọn và hữu ích hoàn toàn bằng tiếng Việt."
+            "Hãy trả lời một cách tự nhiên, ngắn gọn và hữu ích hoàn toàn bằng tiếng Việt.\n"
+            "\n"
+            "=== KÝ ỨC CỤC BỘ (BẮT BUỘC) ===\n"
+            "Bạn có bộ nhớ dài hạn qua file soul.md. Đây là TÍNH NĂNG QUAN TRỌNG NHẤT của bạn.\n"
+            "\n"
+            "QUY TẮC LƯU KÝ ỨC (KHÔNG ĐƯỢC BỎ QUA):\n"
+            "1. Khi người dùng KỂ CHUYỆN, CHIA SẺ sự kiện, cảm xúc, trải nghiệm, những điều muốn ghi nhớ lâu dài chứ không phải xã giao vu vơ -> GỌI memory_save NGAY LẬP TỨC, TRƯỚC KHI trả lời.\n"
+            "   Ví dụ: 'Hôm nay tôi bị vỡ gương xe' -> Gọi memory_save TRƯỚC, rồi mới hỏi han/động viên.\n"
+            "   Ví dụ: 'Tôi vừa đi du lịch Đà Lạt về' -> Gọi memory_save TRƯỚC, rồi mới hỏi chuyện.\n"
+            "   Ví dụ: 'Tôi thích uống cà phê' -> Gọi memory_save TRƯỚC.\n"
+            "   Ví dụ: 'Tôi là AI engineer' -> Gọi memory_save TRƯỚC.\n"
+            "2. Khi lưu sự kiện có thời gian (hôm nay, hôm qua, tuần trước), PHẢI dùng NGÀY CỤ THỂ (vd: 2026-02-11) thay vì 'hôm nay'.\n"
+            "   Lấy ngày từ THÔNG TIN HIỆN TẠI trong system prompt.\n"
+            "3. Khi người dùng HỎI VỀ BẢN THÂN HỌ (bạn biết gì về tôi? hôm nay tôi thế nào? tôi đã làm gì?):\n"
+            "   -> GỌI memory_list TRƯỚC, rồi dùng ký ức để trả lời. TUYỆT ĐỐI KHÔNG trả lời 'tôi không biết' mà không check memory trước.\n"
+            "4. Khi người dùng nói 'quên đi' hoặc sửa thông tin cũ -> gọi memory_remove rồi memory_save.\n"
+            "5. KHÔNG cần xin phép trước khi lưu -- hãy làm TỰ ĐỘNG và TỰ NHIÊN.\n"
+            "6. Section phù hợp: 'user profile' cho thông tin cá nhân, 'learned facts' cho kiến thức, 'conversation notes' cho sự kiện/nhật ký.\n"
+            "7. Hỏi về gì dù có tool call cụ thể nhưng vẫn LUÔN kiểm tra PERSISTENT MEMORY ở trên xem có gì liên quan đến người dùng không (sinh nhật, sự kiện cá nhân, kỷ niệm). Nếu có, PHẢI đề cập.\n"
         )
 
     def _process_tts_queue(self):
@@ -545,6 +568,43 @@ class WakeWordService:
         """Reset TTS state for new conversation"""
         self.stop_current_tts()
         self.stop_tts_flag.clear()
+
+    def _start_wakeword_monitor(self):
+        """Start monitoring for wake word during TTS/LLM to allow interruption"""
+        self._wakeword_monitor_stop.clear()
+        self.interrupted_by_wakeword.clear()
+        self._wakeword_monitor_thread = threading.Thread(
+            target=self._monitor_wakeword_during_tts, daemon=True
+        )
+        self._wakeword_monitor_thread.start()
+
+    def _stop_wakeword_monitor(self):
+        """Stop the wake word monitoring thread"""
+        self._wakeword_monitor_stop.set()
+        if self._wakeword_monitor_thread and self._wakeword_monitor_thread.is_alive():
+            self._wakeword_monitor_thread.join(timeout=1.0)
+        self._wakeword_monitor_thread = None
+
+    def _monitor_wakeword_during_tts(self):
+        """Background thread: listen for wake word during TTS/LLM to allow interruption.
+        Reads audio from the microphone's PvRecorder and checks with Porcupine."""
+        try:
+            while not self._wakeword_monitor_stop.is_set():
+                try:
+                    if not self.microphone or not self.microphone.recorder:
+                        break
+                    pcm = self.microphone.recorder.read()
+                    keyword_index = self.porcupine.process(pcm)
+                    if keyword_index >= 0:
+                        self.emit("debug", message="Wake word detected during response - interrupting!")
+                        self.emit("wake_word")  # Immediately update frontend orb color
+                        self.interrupted_by_wakeword.set()
+                        self.stop_current_tts()
+                        break
+                except Exception:
+                    break
+        except Exception:
+            pass
 
     def _detect_streaming_player(self):
         """Detect if a streaming-capable audio player is available.
@@ -744,6 +804,9 @@ class WakeWordService:
                     self.emit("speech", text=text)
                     self.conversation.add_user_message(text)
                     
+                    # Start wake word monitoring (allows interrupt during LLM/TTS)
+                    self._start_wakeword_monitor()
+                    
                     # Get and speak LLM response
                     self.emit("debug", message="Getting LLM response...")
                     music_tool_called = False
@@ -766,6 +829,21 @@ class WakeWordService:
                     
                     # Wait for TTS queue to empty (conversation turn complete)
                     self.tts_queue.join()
+                    
+                    # Stop wake word monitoring
+                    self._stop_wakeword_monitor()
+                    
+                    # Check if interrupted by wake word
+                    if self.interrupted_by_wakeword.is_set():
+                        self.interrupted_by_wakeword.clear()
+                        self.stop_tts_flag.clear()  # Reset for next TTS
+                        self.emit("debug", message="Interrupted by wake word, ready for new input")
+                        # Quick re-adjust mic for listening
+                        try:
+                            self.microphone.adjust_for_ambient_noise(duration=0.15)
+                        except:
+                            pass
+                        continue  # Go back to listening
                     
                     # Emit that response is complete and ready for next turn
                     self.emit("response_complete")
@@ -800,6 +878,9 @@ class WakeWordService:
                 if consecutive_errors >= max_consecutive_errors:
                     self.emit("debug", message="Too many consecutive errors, ending conversation")
                 break
+        
+        # Ensure wake word monitor is stopped when conversation ends
+        self._stop_wakeword_monitor()
         
         # Restore music volume when conversation ends
         self.emit("music_restore_volume")
@@ -1102,17 +1183,28 @@ class WakeWordService:
             now_str = datetime.datetime.now().strftime("%A, %d/%m/%Y %H:%M:%S")
             
             system_instruction = f"""{self.system_prompt}
+{self.agent_tools.memory.get_prompt_context()}
 THONG TIN HIEN TAI: {now_str}
 QUY TAC PHAN HOI:
 - KHONG su dung dinh dang markdown (nhu *, _, `).
 - Luon su dung cac cong cu (tools) duoc cung cap de tra cuu thoi tiet hoac cac ngay le neu can.
-- Neu thong tin hien tai co ve khong chinh xac, hay chu dong kiem tra lai bang cong cu."""
+- Neu thong tin hien tai co ve khong chinh xac, hay chu dong kiem tra lai bang cong cu.
+- BAT BUOC: Khi nguoi dung ke bat ky su kien/cau chuyen ca nhan nao, GOI memory_save NGAY TRUOC KHI tra loi. Dung ngay cu the (hom nay la {now_str.split(',')[0].strip()}) thay vi 'hom nay'.
+- BAT BUOC: Khi nguoi dung hoi ve ban than ho (toi the nao, ban biet gi ve toi, toi da lam gi), GOI memory_list TRUOC roi tra loi dua tren ky uc."""
 
             # Build conversation history for the new SDK format
             history = []
             for msg in self.conversation.history[:-1]:
                 role = "user" if msg["role"] == "user" else "model"
                 history.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
+            
+            # Safety settings - prevent silent blocking of responses
+            safety_settings = [
+                types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+            ]
             
             # Create chat session
             chat = client.chats.create(
@@ -1121,7 +1213,9 @@ QUY TAC PHAN HOI:
                     system_instruction=system_instruction,
                     tools=[get_gemini_tools()],
                     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                    max_output_tokens=2048
+                    max_output_tokens=2048,
+                    temperature=0.7,
+                    safety_settings=safety_settings
                 ),
                 history=history
             )
@@ -1164,6 +1258,20 @@ QUY TAC PHAN HOI:
                         pass  # chunk.text raises ValueError when response has function calls
             
             self.emit("debug", message=f"Stream finished: {chunk_count} chunks, {len(function_calls)} function calls, text len={len(full_text)}, finish_reason={last_finish_reason}")
+            
+            # Log safety ratings if response is empty (helps diagnose silent blocks)
+            if not full_text and not function_calls and chunk_count > 0:
+                try:
+                    last_chunk = chunk  # Last chunk from the for loop
+                    if hasattr(last_chunk, 'candidates') and last_chunk.candidates:
+                        candidate = last_chunk.candidates[0]
+                        if hasattr(candidate, 'safety_ratings') and candidate.safety_ratings:
+                            ratings = [(r.category, r.probability) for r in candidate.safety_ratings]
+                            self.emit("debug", message=f"Safety ratings: {ratings}")
+                    if hasattr(last_chunk, 'prompt_feedback') and last_chunk.prompt_feedback:
+                        self.emit("debug", message=f"Prompt feedback: {last_chunk.prompt_feedback}")
+                except Exception as diag_err:
+                    self.emit("debug", message=f"Diagnostic error: {diag_err}")
             
             # If there were function calls, execute them and get the final answer
             if function_calls:
@@ -1272,22 +1380,51 @@ QUY TAC PHAN HOI:
             else:
                 self.emit("debug", message=f"WARNING: No text response from Gemini (finish_reason={last_finish_reason})")
                 
-                # Retry once with non-streaming if completely empty
-                self.emit("debug", message="Retrying with non-streaming request...")
+                # Retry with a fresh direct API call (not the same chat session)
+                # Using a direct generate_content call avoids chat session state issues
+                self.emit("debug", message="Retrying with direct API call (non-streaming, fresh context)...")
                 try:
-                    retry_response = chat.send_message(text)
+                    # Build contents from conversation history for a fresh call
+                    retry_contents = []
+                    for msg in self.conversation.history:
+                        role = "user" if msg["role"] == "user" else "model"
+                        retry_contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
+                    
+                    # Add a nudge to encourage response
+                    if retry_contents and retry_contents[-1].role == "user":
+                        # Replace last user message with a slightly modified version
+                        retry_contents[-1] = types.Content(
+                            role="user",
+                            parts=[types.Part.from_text(text=f"{text}\n(Hãy trả lời bằng tiếng Việt.)")]
+                        )
+                    
+                    retry_response = client.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=retry_contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_instruction,
+                            tools=[get_gemini_tools()],
+                            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                            max_output_tokens=2048,
+                            temperature=0.9,
+                            safety_settings=safety_settings
+                        )
+                    )
+                    
                     # Check for function calls in retry
                     retry_fc = []
                     if retry_response.candidates and retry_response.candidates[0].content and retry_response.candidates[0].content.parts:
                         for part in retry_response.candidates[0].content.parts:
                             if hasattr(part, 'function_call') and part.function_call:
                                 retry_fc.append(part.function_call)
+                            elif hasattr(part, 'text') and part.text:
+                                full_text += part.text
                     
                     if retry_fc:
                         self.emit("debug", message=f"Retry found {len(retry_fc)} function call(s)")
                         self.emit("tool_call", tool_name=retry_fc[0].name)
                         # Execute retry function calls
-                        function_responses = []
+                        function_responses_parts = []
                         for fc in retry_fc:
                             tool_name = fc.name
                             tool_args = dict(fc.args) if fc.args else {}
@@ -1297,18 +1434,35 @@ QUY TAC PHAN HOI:
                             if result.get("action") and result["action"].startswith("MUSIC_"):
                                 self.emit("music_action", action=result["action"], data=result.get("data", {}))
                                 music_tool_called = True
-                            function_responses.append(
+                            function_responses_parts.append(
                                 types.Part.from_function_response(
                                     name=tool_name,
                                     response={"result": json.dumps(result, ensure_ascii=False)}
                                 )
                             )
-                        # Get final text from tool results
-                        final_resp = chat.send_message(function_responses)
+                        # Get final text from tool results via fresh call
+                        # Build full context with tool call and response for the follow-up
+                        tool_call_content = types.Content(
+                            role="model",
+                            parts=[types.Part.from_function_call(name=fc.name, args=dict(fc.args) if fc.args else {}) for fc in retry_fc]
+                        )
+                        tool_response_content = types.Content(
+                            role="user",
+                            parts=function_responses_parts
+                        )
+                        final_contents = retry_contents + [tool_call_content, tool_response_content]
+                        final_resp = client.models.generate_content(
+                            model='gemini-2.5-flash',
+                            contents=final_contents,
+                            config=types.GenerateContentConfig(
+                                system_instruction=system_instruction,
+                                max_output_tokens=2048,
+                                temperature=0.9,
+                                safety_settings=safety_settings
+                            )
+                        )
                         if final_resp.text:
                             full_text = final_resp.text
-                    elif retry_response.text:
-                        full_text = retry_response.text
                     
                     if full_text:
                         clean_text = self.clean_text_for_tts(full_text)
@@ -1333,7 +1487,7 @@ QUY TAC PHAN HOI:
 
         except Exception as e:
             self.emit("error", message=f"Gemini Streaming Error: {e}")
-            fallback = "Xin loi, co loi xay ra."
+            fallback = "Xin lỗi, có lỗi xảy ra."
             self.tts_queue.put(fallback)
             return fallback, False    
     def get_llm_response_with_context(self, text):

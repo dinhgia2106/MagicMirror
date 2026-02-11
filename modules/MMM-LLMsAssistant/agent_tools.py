@@ -6,8 +6,10 @@ Provides tool functions for the LLM agent to access MagicMirror data
 
 import datetime
 import json
+import os
 import requests
 from typing import Optional, Dict, Any, List
+from memory_manager import MemoryManager
 import pytz  # For timezone handling
 
 # Import lunar calendar for Vietnamese lunar date conversion
@@ -27,6 +29,13 @@ class AgentTools:
     
     def __init__(self, config: Dict[str, Any] = None):
         self.config = config or {}
+        
+        # Initialize memory manager
+        soul_path = config.get("soul_path") if config else None
+        if not soul_path:
+            soul_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "soul.md")
+        self.memory = MemoryManager(soul_path)
+        
         # Backend API URL for holidays
         self.holiday_api_url = self.config.get("holiday_api_url", "http://127.0.0.1:8000/api/holidays")
         # OpenMeteo API for weather
@@ -45,13 +54,13 @@ class AgentTools:
         now = datetime.datetime.now(self.timezone)
         
         # Vietnamese day names
-        day_names_vi = ["Thu Hai", "Thu Ba", "Thu Tu", "Thu Nam", "Thu Sau", "Thu Bay", "Chu Nhat"]
+        day_names_vi = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
         day_name_vi = day_names_vi[now.weekday()]
         
         # Vietnamese month names
-        month_names_vi = ["", "Thang Gieng", "Thang Hai", "Thang Ba", "Thang Tu", "Thang Nam", 
-                         "Thang Sau", "Thang Bay", "Thang Tam", "Thang Chin", "Thang Muoi", 
-                         "Thang Muoi Mot", "Thang Muoi Hai"]
+        month_names_vi = ["", "Tháng Một", "Tháng Hai", "Tháng Ba", "Tháng Tư", "Tháng Năm", 
+                         "Tháng Sáu", "Tháng Bảy", "Tháng Tám", "Tháng Chín", "Tháng Mười", 
+                         "Tháng Mười Một", "Tháng Mười Hai"]
         
         return {
             "success": True,
@@ -71,8 +80,8 @@ class AgentTools:
                 "hour": now.hour,
                 "minute": now.minute,
                 "second": now.second,
-                "formatted_vi": f"{day_name_vi}, ngay {now.day} thang {now.month} nam {now.year}",
-                "formatted_time_vi": f"{now.hour} gio {now.minute} phut",
+                "formatted_vi": f"{day_name_vi}, ngày {now.day} tháng {now.month} năm {now.year}",
+                "formatted_time_vi": f"{now.hour} giờ {now.minute} phút",
                 "timezone": str(self.timezone)
             }
         }
@@ -106,7 +115,7 @@ class AgentTools:
         days_diff = (target_date - now.date()).days
         
         # Vietnamese day names
-        day_names_vi = ["Thu Hai", "Thu Ba", "Thu Tu", "Thu Nam", "Thu Sau", "Thu Bay", "Chu Nhat"]
+        day_names_vi = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
         weekday = target_date.weekday()
         
         result = {
@@ -123,7 +132,7 @@ class AgentTools:
                 },
                 "days_from_today": days_diff,
                 "relative": "today" if days_diff == 0 else ("in the past" if days_diff < 0 else "in the future"),
-                "formatted_vi": f"{day_names_vi[weekday]}, ngay {target_date.day} thang {target_date.month} nam {target_date.year}",
+                "formatted_vi": f"{day_names_vi[weekday]}, ngày {target_date.day} tháng {target_date.month} năm {target_date.year}",
                 "holidays": []
             }
         }
@@ -141,7 +150,7 @@ class AgentTools:
                 "month_name": lunar_month_name,
                 "can_chi_year": get_year_can_chi(lunar['year']),
                 "can_chi_day": get_day_can_chi(lunar['jd']),
-                "formatted_vi": f"Ngay {lunar['day']} {lunar_month_name} nam {get_year_can_chi(lunar['year'])}"
+                "formatted_vi": f"Ngày {lunar['day']} {lunar_month_name} năm {get_year_can_chi(lunar['year'])}"
             }
             
             # Check for lunar holidays (pass solar date for Giao Thua detection)
@@ -253,16 +262,16 @@ class AgentTools:
         
         # Major Vietnamese holidays (fixed dates)
         holidays = [
-            {"date": f"{current_year}-01-01", "name": "Tet Duong lich", "type": "public"},
-            {"date": f"{current_year}-02-14", "name": "Le tinh nhan", "type": "observance"},
-            {"date": f"{current_year}-03-08", "name": "Ngay Quoc te Phu nu", "type": "observance"},
-            {"date": f"{current_year}-04-30", "name": "Ngay Thong nhat", "type": "public"},
-            {"date": f"{current_year}-05-01", "name": "Ngay Quoc te Lao dong", "type": "public"},
-            {"date": f"{current_year}-06-01", "name": "Ngay Quoc te Thieu nhi", "type": "observance"},
-            {"date": f"{current_year}-09-02", "name": "Quoc khanh Viet Nam", "type": "public"},
-            {"date": f"{current_year}-10-20", "name": "Ngay Phu nu Viet Nam", "type": "observance"},
-            {"date": f"{current_year}-11-20", "name": "Ngay Nha giao Viet Nam", "type": "observance"},
-            {"date": f"{current_year}-12-25", "name": "Giang sinh", "type": "observance"},
+            {"date": f"{current_year}-01-01", "name": "Tết Dương lịch", "type": "public"},
+            {"date": f"{current_year}-02-14", "name": "Lễ tình nhân", "type": "observance"},
+            {"date": f"{current_year}-03-08", "name": "Ngày Quốc tế Phụ nữ", "type": "observance"},
+            {"date": f"{current_year}-04-30", "name": "Ngày Thống nhất", "type": "public"},
+            {"date": f"{current_year}-05-01", "name": "Ngày Quốc tế Lao động", "type": "public"},
+            {"date": f"{current_year}-06-01", "name": "Ngày Quốc tế Thiếu nhi", "type": "observance"},
+            {"date": f"{current_year}-09-02", "name": "Quốc khánh Việt Nam", "type": "public"},
+            {"date": f"{current_year}-10-20", "name": "Ngày Phụ nữ Việt Nam", "type": "observance"},
+            {"date": f"{current_year}-11-20", "name": "Ngày Nhà giáo Việt Nam", "type": "observance"},
+            {"date": f"{current_year}-12-25", "name": "Giáng sinh", "type": "observance"},
         ]
         
         if month:
@@ -783,6 +792,51 @@ class AgentTools:
             "message": f"Đang tìm và phát nhạc theo chủ đề: {mood}"
         }
     
+    # ==================== MEMORY TOOLS ====================
+    
+    def memory_save(self, section: str, content: str) -> Dict[str, Any]:
+        """
+        Save a new memory to persistent storage (soul.md).
+        Use this to remember user preferences, facts, names, or important information.
+        Args:
+            section: Section to save to. Options: 'user profile', 'learned facts', 'conversation notes'
+            content: The memory content to save (e.g., 'User's name is Minh', 'User likes coffee')
+        """
+        result = self.memory.add_memory(section, content)
+        return {
+            "success": result["status"] == "success" or result["status"] == "exists",
+            "message": result["message"]
+        }
+    
+    def memory_list(self, section: str = None) -> Dict[str, Any]:
+        """
+        List all stored memories, optionally filtered by section.
+        Use this when user asks 'what do you know about me?' or 'what do you remember?'
+        Args:
+            section: Optional section to filter ('user profile', 'learned facts', 'conversation notes')
+        """
+        result = self.memory.list_memories(section)
+        if result["status"] == "success":
+            return {
+                "success": True,
+                "memories": result["memories"]
+            }
+        return {"success": False, "error": result.get("message", "Unknown error")}
+    
+    def memory_remove(self, section: str, content: str) -> Dict[str, Any]:
+        """
+        Remove a memory from persistent storage.
+        Use when user says to forget something or correct outdated info.
+        Args:
+            section: Section to remove from ('user profile', 'learned facts', 'conversation notes')
+            content: The memory content to remove (partial match supported)
+        """
+        result = self.memory.remove_memory(section, content)
+        return {
+            "success": result["status"] == "success",
+            "message": result["message"]
+        }
+    
     # ==================== UTILITY METHODS ====================
     
     def execute_tool(self, tool_name: str, arguments: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -813,6 +867,10 @@ class AgentTools:
             "music_adjust_volume": self.music_adjust_volume,
             "music_search_play": self.music_search_play,
             "music_play_mood": self.music_play_mood,
+            # Memory tools
+            "memory_save": self.memory_save,
+            "memory_list": self.memory_list,
+            "memory_remove": self.memory_remove,
         }
         
         if tool_name not in tool_map:
@@ -1052,6 +1110,60 @@ TOOL_DECLARATIONS = [
                 }
             },
             "required": ["mood"]
+        }
+    },
+    # Memory tools
+    {
+        "name": "memory_save",
+        "description": "Save a memory about the user or an important fact to persistent local storage (soul.md). Use this PROACTIVELY when user reveals personal info (name, age, preferences, hobbies), states opinions or facts worth remembering. Examples: user says 'My name is Minh' -> save to 'user profile'; user says 'I have a meeting tomorrow at 9' -> save to 'conversation notes'; user teaches you something -> save to 'learned facts'.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "section": {
+                    "type": "string",
+                    "enum": ["user profile", "learned facts", "conversation notes"],
+                    "description": "Section to save to: 'user profile' for user info/preferences, 'learned facts' for knowledge, 'conversation notes' for reminders"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The memory content to save, written as a clear factual statement"
+                }
+            },
+            "required": ["section", "content"]
+        }
+    },
+    {
+        "name": "memory_list",
+        "description": "List all stored memories from persistent storage. Use when user asks 'what do you know about me?', 'what do you remember?', 'ban nho gi ve toi?', 'ban biet gi ve toi?'.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "section": {
+                    "type": "string",
+                    "enum": ["user profile", "learned facts", "conversation notes"],
+                    "description": "Optional: filter by section"
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "name": "memory_remove",
+        "description": "Remove a memory from persistent storage. Use when user says 'forget that', 'that's wrong', 'xoa di', 'quen di', or corrects previous info.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "section": {
+                    "type": "string",
+                    "enum": ["user profile", "learned facts", "conversation notes"],
+                    "description": "Section to remove from"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "The memory content to remove (partial match supported)"
+                }
+            },
+            "required": ["section", "content"]
         }
     }
 ]
