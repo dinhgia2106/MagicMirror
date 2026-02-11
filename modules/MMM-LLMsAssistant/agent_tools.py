@@ -80,8 +80,8 @@ class AgentTools:
                 "hour": now.hour,
                 "minute": now.minute,
                 "second": now.second,
-                "formatted_vi": f"{day_name_vi}, ngay {now.day} thang {now.month} nam {now.year}",
-                "formatted_time_vi": f"{now.hour} gio {now.minute} phut",
+                "formatted_vi": f"{day_name_vi}, ngày {now.day} tháng {now.month} năm {now.year}",
+                "formatted_time_vi": f"{now.hour} giờ {now.minute} phút",
                 "timezone": str(self.timezone)
             }
         }
@@ -132,7 +132,7 @@ class AgentTools:
                 },
                 "days_from_today": days_diff,
                 "relative": "today" if days_diff == 0 else ("in the past" if days_diff < 0 else "in the future"),
-                "formatted_vi": f"{day_names_vi[weekday]}, ngay {target_date.day} thang {target_date.month} nam {target_date.year}",
+                "formatted_vi": f"{day_names_vi[weekday]}, ngày {target_date.day} tháng {target_date.month} năm {target_date.year}",
                 "holidays": []
             }
         }
@@ -150,7 +150,7 @@ class AgentTools:
                 "month_name": lunar_month_name,
                 "can_chi_year": get_year_can_chi(lunar['year']),
                 "can_chi_day": get_day_can_chi(lunar['jd']),
-                "formatted_vi": f"Ngay {lunar['day']} {lunar_month_name} nam {get_year_can_chi(lunar['year'])}"
+                "formatted_vi": f"Ngày {lunar['day']} {lunar_month_name} năm {get_year_can_chi(lunar['year'])}"
             }
             
             # Check for lunar holidays (pass solar date for Giao Thua detection)

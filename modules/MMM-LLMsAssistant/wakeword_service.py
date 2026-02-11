@@ -500,16 +500,25 @@ class WakeWordService:
             "1. Trò chuyện, dạy học (ngôn ngữ, kiến thức), và trả lời mọi câu hỏi của người dùng bằng kiến thức rộng lớn của bạn.\n"
             "2. Sử dụng các công cụ (tools) ĐƯỢC CUNG CẤP để tra cứu thời gian, thời tiết, ngày lễ, điều khiển nhạc KHI CẦN THIẾT.\n"
             "3. Giải đáp thắc mắc, tư vấn và hỗ trợ mọi vấn đề trong cuộc sống.\n"
-            "LUU Ý: Bạn KHÔNG bị giới hạn chỉ trong các công cụ trên. Hãy thoải mái dạy ngoại ngữ, kể chuyện, làm thơ, hoặc thảo luận bất kỳ chủ đề nào người dùng muốn.\n"
+            "LƯU Ý: Bạn KHÔNG bị giới hạn chỉ trong các công cụ trên. Hãy thoải mái dạy ngoại ngữ, kể chuyện, làm thơ, hoặc thảo luận bất kỳ chủ đề nào người dùng muốn.\n"
             "Hãy trả lời một cách tự nhiên, ngắn gọn và hữu ích hoàn toàn bằng tiếng Việt.\n"
             "\n"
-            "KÝ ỨC CỰC BỘ (MEMORY):\n"
-            "- Bạn có khả năng LƯU TRỮ KÝ ỨC cực bộ qua file soul.md.\n"
-            "- Khi người dùng chia sẻ thông tin cá nhân (tên, sở thích, công việc, v.v.), " 
-            "hãy CHỦ ĐỘNG gọi tool memory_save để lưu lại.\n"
-            "- Khi người dùng hỏi 'bạn nhớ gì về tôi?' hoặc tương tự, gọi memory_list.\n"
-            "- Khi người dùng nói 'quên đi' hoặc sửa thông tin cũ, gọi memory_remove rồi memory_save.\n"
-            "- KHÔNG cần xin phép trước khi lưu ký ức -- hãy làm tự động và tự nhiên."
+            "=== KÝ ỨC CỤC BỘ (BẮT BUỘC) ===\n"
+            "Bạn có bộ nhớ dài hạn qua file soul.md. Đây là TÍNH NĂNG QUAN TRỌNG NHẤT của bạn.\n"
+            "\n"
+            "QUY TẮC LƯU KÝ ỨC (KHÔNG ĐƯỢC BỎ QUA):\n"
+            "1. Khi người dùng KỂ CHUYỆN, CHIA SẺ sự kiện, cảm xúc, trải nghiệm, những điều muốn ghi nhớ lâu dài chứ không phải xã giao vu vơ -> GỌI memory_save NGAY LẬP TỨC, TRƯỚC KHI trả lời.\n"
+            "   Ví dụ: 'Hôm nay tôi bị vỡ gương xe' -> Gọi memory_save TRƯỚC, rồi mới hỏi han/động viên.\n"
+            "   Ví dụ: 'Tôi vừa đi du lịch Đà Lạt về' -> Gọi memory_save TRƯỚC, rồi mới hỏi chuyện.\n"
+            "   Ví dụ: 'Tôi thích uống cà phê' -> Gọi memory_save TRƯỚC.\n"
+            "   Ví dụ: 'Tôi là AI engineer' -> Gọi memory_save TRƯỚC.\n"
+            "2. Khi lưu sự kiện có thời gian (hôm nay, hôm qua, tuần trước), PHẢI dùng NGÀY CỤ THỂ (vd: 2026-02-11) thay vì 'hôm nay'.\n"
+            "   Lấy ngày từ THÔNG TIN HIỆN TẠI trong system prompt.\n"
+            "3. Khi người dùng HỎI VỀ BẢN THÂN HỌ (bạn biết gì về tôi? hôm nay tôi thế nào? tôi đã làm gì?):\n"
+            "   -> GỌI memory_list TRƯỚC, rồi dùng ký ức để trả lời. TUYỆT ĐỐI KHÔNG trả lời 'tôi không biết' mà không check memory trước.\n"
+            "4. Khi người dùng nói 'quên đi' hoặc sửa thông tin cũ -> gọi memory_remove rồi memory_save.\n"
+            "5. KHÔNG cần xin phép trước khi lưu -- hãy làm TỰ ĐỘNG và TỰ NHIÊN.\n"
+            "6. Section phù hợp: 'user profile' cho thông tin cá nhân, 'learned facts' cho kiến thức, 'conversation notes' cho sự kiện/nhật ký.\n"
         )
 
     def _process_tts_queue(self):
@@ -1116,7 +1125,8 @@ QUY TAC PHAN HOI:
 - KHONG su dung dinh dang markdown (nhu *, _, `).
 - Luon su dung cac cong cu (tools) duoc cung cap de tra cuu thoi tiet hoac cac ngay le neu can.
 - Neu thong tin hien tai co ve khong chinh xac, hay chu dong kiem tra lai bang cong cu.
-- Khi nguoi dung chia se thong tin ca nhan, hay TU DONG goi memory_save ma KHONG can hoi lai."""
+- BAT BUOC: Khi nguoi dung ke bat ky su kien/cau chuyen ca nhan nao, GOI memory_save NGAY TRUOC KHI tra loi. Dung ngay cu the (hom nay la {now_str.split(',')[0].strip()}) thay vi 'hom nay'.
+- BAT BUOC: Khi nguoi dung hoi ve ban than ho (toi the nao, ban biet gi ve toi, toi da lam gi), GOI memory_list TRUOC roi tra loi dua tren ky uc."""
 
             # Build conversation history for the new SDK format
             history = []
@@ -1343,7 +1353,7 @@ QUY TAC PHAN HOI:
 
         except Exception as e:
             self.emit("error", message=f"Gemini Streaming Error: {e}")
-            fallback = "Xin loi, co loi xay ra."
+            fallback = "Xin lỗi, có lỗi xảy ra."
             self.tts_queue.put(fallback)
             return fallback, False    
     def get_llm_response_with_context(self, text):
