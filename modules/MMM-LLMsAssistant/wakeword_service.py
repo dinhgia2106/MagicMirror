@@ -1106,23 +1106,40 @@ QUY TAC PHAN HOI:
             function_calls = []
             music_tool_called = False
             chunk_count = 0
+            last_finish_reason = None
             
             # Stream the response - collect all text and function calls
             for chunk in chat.send_message_stream(text):
                 chunk_count += 1
                 
-                # Check for function calls in parts
-                if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                    for part in chunk.candidates[0].content.parts:
-                        if part.function_call:
-                            function_calls.append(part.function_call)
-                            self.emit("debug", message=f"Found function call: {part.function_call.name}")
+                # Log finish_reason for debugging empty responses
+                try:
+                    if chunk.candidates and chunk.candidates[0].finish_reason:
+                        last_finish_reason = chunk.candidates[0].finish_reason
+                except (AttributeError, IndexError):
+                    pass
                 
-                # Collect text from chunk.text (avoid duplicate by not also reading from parts)
-                if chunk.text:
-                    full_text += chunk.text
+                # Check for function calls in parts FIRST (before chunk.text which may raise ValueError)
+                try:
+                    if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                        for part in chunk.candidates[0].content.parts:
+                            if hasattr(part, 'function_call') and part.function_call:
+                                function_calls.append(part.function_call)
+                                self.emit("debug", message=f"Found function call: {part.function_call.name}")
+                            elif hasattr(part, 'text') and part.text:
+                                full_text += part.text
+                except (AttributeError, IndexError) as e:
+                    self.emit("debug", message=f"Chunk parse error: {e}")
+                
+                # Also try chunk.text as fallback (wrapped in try-except for safety)
+                if not full_text:
+                    try:
+                        if chunk.text:
+                            full_text += chunk.text
+                    except (ValueError, AttributeError):
+                        pass  # chunk.text raises ValueError when response has function calls
             
-            self.emit("debug", message=f"Stream finished: {chunk_count} chunks, {len(function_calls)} function calls, text len={len(full_text)}")
+            self.emit("debug", message=f"Stream finished: {chunk_count} chunks, {len(function_calls)} function calls, text len={len(full_text)}, finish_reason={last_finish_reason}")
             
             # If there were function calls, execute them and get the final answer
             if function_calls:
@@ -1159,14 +1176,23 @@ QUY TAC PHAN HOI:
                     
                     new_function_calls = []
                     for chunk in chat.send_message_stream(function_responses):
-                        # Check for more function calls
-                        if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
-                            for part in chunk.candidates[0].content.parts:
-                                if part.function_call:
-                                    new_function_calls.append(part.function_call)
+                        # Check for more function calls (robust parsing)
+                        try:
+                            if chunk.candidates and chunk.candidates[0].content and chunk.candidates[0].content.parts:
+                                for part in chunk.candidates[0].content.parts:
+                                    if hasattr(part, 'function_call') and part.function_call:
+                                        new_function_calls.append(part.function_call)
+                                    elif hasattr(part, 'text') and part.text:
+                                        full_text += part.text
+                        except (AttributeError, IndexError) as e:
+                            self.emit("debug", message=f"Chunk parse error in tool round: {e}")
                         
-                        if chunk.text:
-                            full_text += chunk.text
+                        try:
+                            if chunk.text:
+                                # Only add if not already captured from parts
+                                pass
+                        except (ValueError, AttributeError):
+                            pass
                     
                     # If no more function calls, we're done
                     if not new_function_calls:
@@ -1218,7 +1244,55 @@ QUY TAC PHAN HOI:
                 except Exception as fb_error:
                     self.emit("debug", message=f"Fallback error: {fb_error}")
             else:
-                self.emit("debug", message="WARNING: No text response from Gemini")
+                self.emit("debug", message=f"WARNING: No text response from Gemini (finish_reason={last_finish_reason})")
+                
+                # Retry once with non-streaming if completely empty
+                self.emit("debug", message="Retrying with non-streaming request...")
+                try:
+                    retry_response = chat.send_message(text)
+                    # Check for function calls in retry
+                    retry_fc = []
+                    if retry_response.candidates and retry_response.candidates[0].content:
+                        for part in retry_response.candidates[0].content.parts:
+                            if hasattr(part, 'function_call') and part.function_call:
+                                retry_fc.append(part.function_call)
+                    
+                    if retry_fc:
+                        self.emit("debug", message=f"Retry found {len(retry_fc)} function call(s)")
+                        # Execute retry function calls
+                        function_responses = []
+                        for fc in retry_fc:
+                            tool_name = fc.name
+                            tool_args = dict(fc.args) if fc.args else {}
+                            self.emit("debug", message=f"Calling {tool_name} with {tool_args}...")
+                            result = self.agent_tools.execute_tool(tool_name, tool_args)
+                            self.emit("debug", message=f"Tool result: {str(result)[:200]}...")
+                            if result.get("action") and result["action"].startswith("MUSIC_"):
+                                self.emit("music_action", action=result["action"], data=result.get("data", {}))
+                                music_tool_called = True
+                            function_responses.append(
+                                types.Part.from_function_response(
+                                    name=tool_name,
+                                    response={"result": json.dumps(result, ensure_ascii=False)}
+                                )
+                            )
+                        # Get final text from tool results
+                        final_resp = chat.send_message(function_responses)
+                        if final_resp.text:
+                            full_text = final_resp.text
+                    elif retry_response.text:
+                        full_text = retry_response.text
+                    
+                    if full_text:
+                        clean_text = self.clean_text_for_tts(full_text)
+                        if clean_text:
+                            self.emit("llm_response", text=clean_text)
+                            self.tts_queue.put(clean_text)
+                        self.emit("debug", message=f"Retry succeeded: text len={len(full_text)}")
+                    else:
+                        self.emit("debug", message="WARNING: Retry also returned no response")
+                except Exception as retry_err:
+                    self.emit("debug", message=f"Retry error: {retry_err}")
             
             return full_text, music_tool_called
 
