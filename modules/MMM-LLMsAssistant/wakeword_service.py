@@ -486,6 +486,11 @@ class WakeWordService:
         self.tts_thread = threading.Thread(target=self._process_tts_queue, daemon=True)
         self.tts_thread.start()        
         
+        # Wake word interrupt during TTS/LLM response
+        self.interrupted_by_wakeword = threading.Event()
+        self._wakeword_monitor_stop = threading.Event()
+        self._wakeword_monitor_thread = None
+        
         self.agent_tools = AgentTools({
             "holiday_api_url": "http://127.0.0.1:8000/api/holidays",
             "lat": 16.463713,
@@ -563,6 +568,43 @@ class WakeWordService:
         """Reset TTS state for new conversation"""
         self.stop_current_tts()
         self.stop_tts_flag.clear()
+
+    def _start_wakeword_monitor(self):
+        """Start monitoring for wake word during TTS/LLM to allow interruption"""
+        self._wakeword_monitor_stop.clear()
+        self.interrupted_by_wakeword.clear()
+        self._wakeword_monitor_thread = threading.Thread(
+            target=self._monitor_wakeword_during_tts, daemon=True
+        )
+        self._wakeword_monitor_thread.start()
+
+    def _stop_wakeword_monitor(self):
+        """Stop the wake word monitoring thread"""
+        self._wakeword_monitor_stop.set()
+        if self._wakeword_monitor_thread and self._wakeword_monitor_thread.is_alive():
+            self._wakeword_monitor_thread.join(timeout=1.0)
+        self._wakeword_monitor_thread = None
+
+    def _monitor_wakeword_during_tts(self):
+        """Background thread: listen for wake word during TTS/LLM to allow interruption.
+        Reads audio from the microphone's PvRecorder and checks with Porcupine."""
+        try:
+            while not self._wakeword_monitor_stop.is_set():
+                try:
+                    if not self.microphone or not self.microphone.recorder:
+                        break
+                    pcm = self.microphone.recorder.read()
+                    keyword_index = self.porcupine.process(pcm)
+                    if keyword_index >= 0:
+                        self.emit("debug", message="Wake word detected during response - interrupting!")
+                        self.emit("wake_word")  # Immediately update frontend orb color
+                        self.interrupted_by_wakeword.set()
+                        self.stop_current_tts()
+                        break
+                except Exception:
+                    break
+        except Exception:
+            pass
 
     def _detect_streaming_player(self):
         """Detect if a streaming-capable audio player is available.
@@ -762,6 +804,9 @@ class WakeWordService:
                     self.emit("speech", text=text)
                     self.conversation.add_user_message(text)
                     
+                    # Start wake word monitoring (allows interrupt during LLM/TTS)
+                    self._start_wakeword_monitor()
+                    
                     # Get and speak LLM response
                     self.emit("debug", message="Getting LLM response...")
                     music_tool_called = False
@@ -784,6 +829,21 @@ class WakeWordService:
                     
                     # Wait for TTS queue to empty (conversation turn complete)
                     self.tts_queue.join()
+                    
+                    # Stop wake word monitoring
+                    self._stop_wakeword_monitor()
+                    
+                    # Check if interrupted by wake word
+                    if self.interrupted_by_wakeword.is_set():
+                        self.interrupted_by_wakeword.clear()
+                        self.stop_tts_flag.clear()  # Reset for next TTS
+                        self.emit("debug", message="Interrupted by wake word, ready for new input")
+                        # Quick re-adjust mic for listening
+                        try:
+                            self.microphone.adjust_for_ambient_noise(duration=0.15)
+                        except:
+                            pass
+                        continue  # Go back to listening
                     
                     # Emit that response is complete and ready for next turn
                     self.emit("response_complete")
@@ -818,6 +878,9 @@ class WakeWordService:
                 if consecutive_errors >= max_consecutive_errors:
                     self.emit("debug", message="Too many consecutive errors, ending conversation")
                 break
+        
+        # Ensure wake word monitor is stopped when conversation ends
+        self._stop_wakeword_monitor()
         
         # Restore music volume when conversation ends
         self.emit("music_restore_volume")
