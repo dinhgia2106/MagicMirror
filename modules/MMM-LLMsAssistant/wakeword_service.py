@@ -50,6 +50,14 @@ except ImportError:
     print(json.dumps({"type": "error", "message": "Please install: pip install numpy"}))
     sys.exit(1)
 
+# WebRTC VAD - accurate voice activity detection (same as XiaoZhi-ESP32)
+# Falls back to energy-based VAD if not installed
+try:
+    import webrtcvad
+    WEBRTC_VAD_AVAILABLE = True
+except ImportError:
+    WEBRTC_VAD_AVAILABLE = False
+
 # Edge-TTS is used for Vietnamese text-to-speech
 # It works cross-platform (Windows, Linux ARM, etc.) via Microsoft Azure API
 # No local ML models needed, avoiding "Illegal instruction" errors on Pi
@@ -58,8 +66,8 @@ except ImportError:
 class PvRecorderMicrophone:
     """
     Microphone class using PvRecorder for audio capture.
-    Creates its own PvRecorder instance for speech capture.
-    Uses adaptive VAD for faster end-of-speech detection.
+    Uses WebRTC VAD (like XiaoZhi-ESP32) for accurate speech detection,
+    with energy-based fallback if webrtcvad is not installed.
     """
     
     def __init__(self, sample_rate=16000, frame_length=512):
@@ -69,8 +77,17 @@ class PvRecorderMicrophone:
         self.frame_length = frame_length
         self.recorder = None
         
-        # === IMPROVED VAD SETTINGS ===
-        # Base sensitivity settings
+        # === WebRTC VAD (used with energy for hybrid detection) ===
+        self.use_webrtc_vad = WEBRTC_VAD_AVAILABLE
+        if self.use_webrtc_vad:
+            self.vad = webrtcvad.Vad(3)  # Aggressiveness 3 = strictest, best noise rejection
+            self.vad_frame_ms = 30       # 30ms frames (webrtcvad accepts 10/20/30)
+            self.vad_frame_samples = int(sample_rate * self.vad_frame_ms / 1000)  # 480
+            self._vad_sample_buffer = np.array([], dtype=np.int16)
+            self._vad_decisions = []     # Rolling window of recent VAD decisions
+            self._vad_decision_window = 5  # Smooth over 5 VAD frames (~150ms) to prevent flicker
+        
+        # === Energy-based VAD (fallback + end-of-speech helper) ===
         self.energy_threshold = 100
         self.dynamic_energy_ratio = 1.8  # Multiplier for ambient noise
         
@@ -119,6 +136,50 @@ class PvRecorderMicrophone:
     def __exit__(self, exc_type, exc_val, exc_tb):
         pass
     
+    def _check_vad(self, audio_array):
+        """Check speech using WebRTC VAD with frame re-chunking and smoothing.
+        
+        PvRecorder gives 512-sample frames (32ms), but webrtcvad needs 480 samples (30ms).
+        This method buffers samples and processes complete 30ms chunks.
+        
+        Returns: True (speech), False (silence), or None (not enough data / VAD unavailable)
+        """
+        if not self.use_webrtc_vad:
+            return None
+        
+        # Accumulate samples from PvRecorder frame
+        self._vad_sample_buffer = np.concatenate([self._vad_sample_buffer, audio_array])
+        
+        # Process all complete 30ms VAD frames
+        processed_any = False
+        while len(self._vad_sample_buffer) >= self.vad_frame_samples:
+            frame = self._vad_sample_buffer[:self.vad_frame_samples]
+            self._vad_sample_buffer = self._vad_sample_buffer[self.vad_frame_samples:]
+            
+            frame_bytes = frame.astype(np.int16).tobytes()
+            try:
+                is_speech = self.vad.is_speech(frame_bytes, self.sample_rate)
+                self._vad_decisions.append(is_speech)
+                if len(self._vad_decisions) > self._vad_decision_window:
+                    self._vad_decisions.pop(0)
+                processed_any = True
+            except Exception:
+                pass
+        
+        if not processed_any or not self._vad_decisions:
+            return None
+        
+        # Smoothing: speech if supermajority (>=60%) of recent frames detected speech
+        # This prevents ambient noise flicker from triggering false speech start
+        speech_count = sum(self._vad_decisions)
+        return speech_count >= max(2, int(len(self._vad_decisions) * 0.6))
+    
+    def _reset_vad_state(self):
+        """Reset WebRTC VAD buffers for a new listening session"""
+        if self.use_webrtc_vad:
+            self._vad_sample_buffer = np.array([], dtype=np.int16)
+            self._vad_decisions = []
+    
     def adjust_for_ambient_noise(self, duration=1.0):
         """Adjust energy threshold based on ambient noise using PvRecorder"""
         if not self.recorder:
@@ -162,7 +223,8 @@ class PvRecorderMicrophone:
     def listen(self, timeout=None, phrase_time_limit=None):
         """
         Listen for speech using PvRecorder and return AudioData when speech ends.
-        Uses adaptive VAD with energy drop detection for faster response.
+        Uses WebRTC VAD (primary) or energy-based VAD (fallback) with
+        adaptive end-of-speech detection via energy drop analysis.
         """
         if not self.recorder:
             raise RuntimeError("PvRecorder not set. Call set_recorder() first.")
@@ -179,14 +241,15 @@ class PvRecorderMicrophone:
         start_time = time.time()
         speech_start_time = None
         
-        # Adaptive VAD state
+        # Reset VAD and energy state for new listening session
+        self._reset_vad_state()
         self.recent_speech_energies = []
         self.peak_speech_energy = 0
         energy_window = []  # Rolling window for smoothing
         window_size = 3     # Smooth over 3 frames (~96ms at 512 frame_length)
         
         while True:
-            # Check timeout
+            # Check timeout (no speech detected yet)
             elapsed = time.time() - start_time
             if timeout and not speech_started and elapsed > timeout:
                 raise sr.WaitTimeoutError("Listening timed out while waiting for phrase to start")
@@ -196,6 +259,13 @@ class PvRecorderMicrophone:
                 if time.time() - speech_start_time > phrase_time_limit:
                     break
             
+            # Safety timeout: if speech "started" but very few actual speech chunks
+            # accumulated (false start from noise), reset and treat as timeout
+            if speech_started and timeout and speech_start_time:
+                time_since_speech_start = time.time() - speech_start_time
+                if time_since_speech_start > timeout and speech_chunks < phrase_chunks:
+                    raise sr.WaitTimeoutError("Listening timed out - false speech start from noise")
+            
             # Read audio from PvRecorder
             try:
                 pcm = self.recorder.read()
@@ -203,14 +273,28 @@ class PvRecorderMicrophone:
             except Exception:
                 continue
             
-            # Calculate energy with smoothing
+            # Calculate energy (always needed for adaptive end-of-speech)
             energy = np.sqrt(np.mean(audio_array.astype(np.float64) ** 2))
             energy_window.append(energy)
             if len(energy_window) > window_size:
                 energy_window.pop(0)
             smoothed_energy = np.mean(energy_window)
             
-            is_speech = smoothed_energy > self.energy_threshold
+            # Speech detection: HYBRID approach
+            # - WebRTC VAD + energy must BOTH agree = speech (prevents noise false positives)
+            # - If WebRTC VAD unavailable, fall back to energy-only
+            energy_says_speech = smoothed_energy > self.energy_threshold
+            vad_result = self._check_vad(audio_array)
+            
+            if vad_result is not None:
+                # Hybrid: both VAD and energy must agree for speech start
+                # For ongoing speech, be slightly more lenient (either can sustain)
+                if not speech_started:
+                    is_speech = vad_result and energy_says_speech
+                else:
+                    is_speech = vad_result or energy_says_speech
+            else:
+                is_speech = energy_says_speech
             
             if is_speech:
                 if not speech_started:
