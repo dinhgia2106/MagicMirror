@@ -27,6 +27,14 @@ module.exports = NodeHelper.create({
         if (notification === "SEARCH_RELATED") {
             this.searchRelatedTracks(payload.trackId, payload.genre, payload.tags, payload.title);
         }
+
+        if (notification === "PRELOAD_NEXT") {
+            this.preloadRelatedTrack(payload.trackId, payload.genre, payload.tags, payload.title, payload.excludeIds || []);
+        }
+
+        if (notification === "SEARCH_MOOD") {
+            this.searchByMood(payload.mood, payload.savedState);
+        }
     },
 
     // Get OAuth access token using client credentials
@@ -263,6 +271,305 @@ module.exports = NodeHelper.create({
         });
 
         req.end();
+    },
+
+    // Preload next related track (same logic as searchRelatedTracks but sends PRELOAD_RESULT)
+    preloadRelatedTrack: function (trackId, genre, tags, title, excludeIds) {
+        console.log("[MMM-SoundCloud] Preloading next track for: " + title);
+
+        this.getAccessToken((err, token) => {
+            if (err) {
+                console.error("[MMM-SoundCloud] Auth error for preload: " + err.message);
+                this.sendSocketNotification("PRELOAD_RESULT", {
+                    success: false,
+                    error: err.message
+                });
+                return;
+            }
+
+            const relatedPath = `/tracks/${trackId}/related?limit=15`;
+
+            const relatedOptions = {
+                hostname: "api.soundcloud.com",
+                port: 443,
+                path: relatedPath,
+                method: "GET",
+                headers: {
+                    "Authorization": "OAuth " + token,
+                    "Accept": "application/json"
+                }
+            };
+
+            const relatedReq = https.request(relatedOptions, (res) => {
+                let data = "";
+                res.on("data", chunk => data += chunk);
+                res.on("end", () => {
+                    try {
+                        const result = JSON.parse(data);
+                        const tracks = result.collection || result || [];
+                        // Filter out current track and already-played tracks
+                        const filtered = tracks.filter(t =>
+                            t.id !== trackId &&
+                            t.streamable !== false &&
+                            !excludeIds.includes(t.id)
+                        );
+
+                        if (filtered.length > 0) {
+                            const pickIndex = Math.floor(Math.random() * Math.min(5, filtered.length));
+                            const picked = filtered[pickIndex];
+                            console.log("[MMM-SoundCloud] Preloaded: " + picked.title + " by " + (picked.user ? picked.user.username : "Unknown"));
+
+                            this.sendSocketNotification("PRELOAD_RESULT", {
+                                success: true,
+                                track: {
+                                    id: picked.id,
+                                    title: picked.title,
+                                    artist: picked.user ? picked.user.username : "Unknown",
+                                    permalink_url: picked.permalink_url,
+                                    duration: picked.duration,
+                                    artwork_url: picked.artwork_url,
+                                    genre: picked.genre || "",
+                                    tag_list: picked.tag_list || ""
+                                }
+                            });
+                            return;
+                        }
+
+                        // Fallback: search by genre/tags/title
+                        this.preloadFallbackSearch(token, trackId, genre, tags, title, excludeIds);
+                    } catch (e) {
+                        console.error("[MMM-SoundCloud] Preload parse error: " + e.message);
+                        this.preloadFallbackSearch(token, trackId, genre, tags, title, excludeIds);
+                    }
+                });
+            });
+
+            relatedReq.on("error", (e) => {
+                console.error("[MMM-SoundCloud] Preload request error: " + e.message);
+                this.sendSocketNotification("PRELOAD_RESULT", {
+                    success: false,
+                    error: e.message
+                });
+            });
+
+            relatedReq.end();
+        });
+    },
+
+    // Fallback search for preloading
+    preloadFallbackSearch: function (token, trackId, genre, tags, title, excludeIds) {
+        let searchQuery = "";
+        if (genre && genre.trim()) {
+            searchQuery = genre.trim();
+        } else if (tags && tags.trim()) {
+            searchQuery = tags.split(/[,\s]+/).slice(0, 3).join(" ");
+        } else if (title) {
+            const stopWords = ["official", "music", "video", "mv", "lyric", "lyrics", "audio", "hd", "hq", "ft", "feat", "remix"];
+            searchQuery = title
+                .toLowerCase()
+                .replace(/[^a-z0-9\s\u00C0-\u024F\u1E00-\u1EFF]/g, " ")
+                .split(/\s+/)
+                .filter(w => w.length > 2 && !stopWords.includes(w))
+                .slice(0, 3)
+                .join(" ");
+        }
+        if (!searchQuery) searchQuery = "trending music";
+
+        const encodedQuery = encodeURIComponent(searchQuery);
+        const path = `/tracks?q=${encodedQuery}&access=playable&limit=15`;
+
+        const options = {
+            hostname: "api.soundcloud.com",
+            port: 443,
+            path: path,
+            method: "GET",
+            headers: {
+                "Authorization": "OAuth " + token,
+                "Accept": "application/json"
+            }
+        };
+
+        const req = https.request(options, (res) => {
+            let data = "";
+            res.on("data", chunk => data += chunk);
+            res.on("end", () => {
+                try {
+                    const result = JSON.parse(data);
+                    const tracks = result.collection || result || [];
+                    const filtered = tracks.filter(t =>
+                        t.id !== trackId &&
+                        t.streamable !== false &&
+                        !excludeIds.includes(t.id)
+                    );
+
+                    if (filtered.length > 0) {
+                        const pickIndex = Math.floor(Math.random() * Math.min(8, filtered.length));
+                        const picked = filtered[pickIndex];
+                        console.log("[MMM-SoundCloud] Preload fallback picked: " + picked.title);
+
+                        this.sendSocketNotification("PRELOAD_RESULT", {
+                            success: true,
+                            track: {
+                                id: picked.id,
+                                title: picked.title,
+                                artist: picked.user ? picked.user.username : "Unknown",
+                                permalink_url: picked.permalink_url,
+                                duration: picked.duration,
+                                artwork_url: picked.artwork_url,
+                                genre: picked.genre || "",
+                                tag_list: picked.tag_list || ""
+                            }
+                        });
+                    } else {
+                        this.sendSocketNotification("PRELOAD_RESULT", {
+                            success: false,
+                            error: "No tracks found for preload"
+                        });
+                    }
+                } catch (e) {
+                    this.sendSocketNotification("PRELOAD_RESULT", {
+                        success: false,
+                        error: "Parse error: " + e.message
+                    });
+                }
+            });
+        });
+
+        req.on("error", (e) => {
+            this.sendSocketNotification("PRELOAD_RESULT", {
+                success: false,
+                error: e.message
+            });
+        });
+
+        req.end();
+    },
+
+    // Search for music by mood/genre/theme (for AI assistant)
+    searchByMood: function (mood, savedState) {
+        console.log("[MMM-SoundCloud] Searching by mood: " + mood);
+
+        // Map common moods/themes to better search queries
+        const moodMap = {
+            "buồn": "sad vietnamese music",
+            "vui": "happy upbeat music",
+            "tết": "nhạc tết vietnamese new year",
+            "chill": "chill lofi relax",
+            "tập trung": "focus study music",
+            "ngủ": "sleep ambient calm",
+            "sôi động": "energetic dance party",
+            "romantic": "romantic love songs",
+            "lãng mạn": "romantic love songs vietnamese",
+            "workout": "workout gym motivation",
+            "jazz": "jazz music",
+            "lofi": "lofi hip hop beats",
+            "rock": "rock music",
+            "pop": "pop music hits",
+            "classical": "classical music",
+            "edm": "electronic dance music",
+            "random": "popular trending music",
+            "ngẫu nhiên": "popular trending music"
+        };
+
+        // Check if mood matches any mapped term
+        let searchQuery = mood;
+        const moodLower = mood.toLowerCase().trim();
+        for (const [key, value] of Object.entries(moodMap)) {
+            if (moodLower.includes(key)) {
+                searchQuery = value;
+                break;
+            }
+        }
+
+        this.getAccessToken((err, token) => {
+            if (err) {
+                console.error("[MMM-SoundCloud] Auth error for mood search: " + err.message);
+                this.sendSocketNotification("SEARCH_RESULT", {
+                    success: false,
+                    error: err.message,
+                    query: mood,
+                    savedState: savedState
+                });
+                return;
+            }
+
+            const encodedQuery = encodeURIComponent(searchQuery);
+            const path = `/tracks?q=${encodedQuery}&access=playable&limit=20`;
+
+            const options = {
+                hostname: "api.soundcloud.com",
+                port: 443,
+                path: path,
+                method: "GET",
+                headers: {
+                    "Authorization": "OAuth " + token,
+                    "Accept": "application/json"
+                }
+            };
+
+            const req = https.request(options, (res) => {
+                let data = "";
+                res.on("data", chunk => data += chunk);
+                res.on("end", () => {
+                    try {
+                        const result = JSON.parse(data);
+                        const tracks = result.collection || result || [];
+                        const filtered = tracks.filter(t => t.streamable !== false);
+
+                        if (filtered.length > 0) {
+                            // Pick a random track from results for variety
+                            const pickIndex = Math.floor(Math.random() * Math.min(10, filtered.length));
+                            const picked = filtered[pickIndex];
+                            console.log("[MMM-SoundCloud] Mood search picked: " + picked.title + " by " + (picked.user ? picked.user.username : "Unknown"));
+
+                            this.sendSocketNotification("SEARCH_RESULT", {
+                                success: true,
+                                query: mood,
+                                track: {
+                                    id: picked.id,
+                                    title: picked.title,
+                                    artist: picked.user ? picked.user.username : "Unknown",
+                                    permalink_url: picked.permalink_url,
+                                    stream_url: picked.stream_url,
+                                    duration: picked.duration,
+                                    artwork_url: picked.artwork_url,
+                                    genre: picked.genre || "",
+                                    tag_list: picked.tag_list || ""
+                                },
+                                savedState: savedState
+                            });
+                        } else {
+                            this.sendSocketNotification("SEARCH_RESULT", {
+                                success: false,
+                                error: "No tracks found for mood: " + mood,
+                                query: mood,
+                                savedState: savedState
+                            });
+                        }
+                    } catch (e) {
+                        console.error("[MMM-SoundCloud] Mood search parse error: " + e.message);
+                        this.sendSocketNotification("SEARCH_RESULT", {
+                            success: false,
+                            error: "Parse error: " + e.message,
+                            query: mood,
+                            savedState: savedState
+                        });
+                    }
+                });
+            });
+
+            req.on("error", (e) => {
+                console.error("[MMM-SoundCloud] Mood search error: " + e.message);
+                this.sendSocketNotification("SEARCH_RESULT", {
+                    success: false,
+                    error: e.message,
+                    query: mood,
+                    savedState: savedState
+                });
+            });
+
+            req.end();
+        });
     },
 
     // Search for tracks using SoundCloud API

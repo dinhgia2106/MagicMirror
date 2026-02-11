@@ -153,6 +153,7 @@ Module.register("MMM-LLMsAssistant", {
             case "MUSIC_ADJUST_VOLUME":
             case "MUSIC_TOGGLE":
             case "MUSIC_SEARCH_PLAY":
+            case "MUSIC_PLAY_MOOD":
                 Log.info("MMM-LLMsAssistant: Forwarding " + notification + " with payload: " + JSON.stringify(payload));
                 this.sendNotification(notification, payload);
                 break;

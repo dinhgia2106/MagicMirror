@@ -50,6 +50,15 @@ Module.register("MMM-SoundCloud", {
         // Volume control during AI conversation
         this.isConversationActive = false;  // Flag when AI conversation is active
         this.pendingVolume = null;           // Volume to apply when conversation ends
+
+        // Preload cache for next track (global mode)
+        this.preloadedTrack = null;          // Cached next track info { permalink_url, id, title, artist, genre, tag_list, artwork_url }
+        this.isPreloading = false;           // Flag to prevent duplicate preload requests
+        this.preloadTimer = null;            // Timer ID for delayed preload
+
+        // Guards against re-entrant/duplicate calls
+        this.isLoadingTrack = false;         // True while widget.load() is in progress
+        this.isSearchingRelated = false;     // True while waiting for RELATED_TRACKS_RESULT
     },
 
     getDom: function () {
@@ -421,6 +430,12 @@ Module.register("MMM-SoundCloud", {
                     Log.info("MMM-SoundCloud: Mode set to " + this.playMode);
                 }
                 break;
+            case "MUSIC_PLAY_MOOD":
+                if (payload && payload.mood) {
+                    Log.info("MMM-SoundCloud: Received MUSIC_PLAY_MOOD: " + payload.mood);
+                    this.playByMood(payload.mood);
+                }
+                break;
             case "DOM_OBJECTS_CREATED":
                 this.initWidget();
                 // Send config to node_helper for API access
@@ -436,6 +451,9 @@ Module.register("MMM-SoundCloud", {
         }
         if (notification === "RELATED_TRACKS_RESULT") {
             this.handleRelatedTrackResult(payload);
+        }
+        if (notification === "PRELOAD_RESULT") {
+            this.handlePreloadResult(payload);
         }
     },
 
@@ -467,8 +485,23 @@ Module.register("MMM-SoundCloud", {
 
         this.widget.bind(SC.Widget.Events.PLAY, () => {
             this.isPaused = false;
+            this.isLoadingTrack = false; // Track is now playing, loading complete
             this.updatePlayStatus();
             this.updateDiscAnimation(true);
+
+            // Preload next track when playing in global mode
+            if (this.playMode === "global" && (this.isPlayingSearched || this.currentGlobalTrack)) {
+                // Clear any existing preload timer first
+                if (this.preloadTimer) {
+                    clearTimeout(this.preloadTimer);
+                    this.preloadTimer = null;
+                }
+                // Delay preload slightly to let track info settle
+                this.preloadTimer = setTimeout(() => {
+                    this.preloadTimer = null;
+                    this.preloadNextTrack();
+                }, 3000);
+            }
         });
 
         this.widget.bind(SC.Widget.Events.PAUSE, () => {
@@ -486,13 +519,30 @@ Module.register("MMM-SoundCloud", {
         });
 
         this.widget.bind(SC.Widget.Events.FINISH, () => {
+            // Guard: ignore FINISH if we're in the middle of loading a new track
+            if (this.isLoadingTrack) {
+                Log.info("MMM-SoundCloud: Ignoring FINISH event during track loading");
+                return;
+            }
+
+            // Clear preload timer
+            if (this.preloadTimer) {
+                clearTimeout(this.preloadTimer);
+                this.preloadTimer = null;
+            }
+
             // Track finished - push to history before advancing
             this.pushCurrentToHistory();
 
             if (this.isPlayingSearched && this.playMode === "global") {
-                // Global mode: find and play related tracks instead of returning
-                Log.info("MMM-SoundCloud: Global mode - searching for related track");
-                this.playNextRelatedTrack();
+                // Global mode: use preloaded track if available
+                if (this.preloadedTrack) {
+                    Log.info("MMM-SoundCloud: Global mode - using preloaded track: " + this.preloadedTrack.title);
+                    this.playPreloadedTrack();
+                } else {
+                    Log.info("MMM-SoundCloud: Global mode - no preloaded track, searching...");
+                    this.playNextRelatedTrack();
+                }
             } else if (this.isPlayingSearched) {
                 // Album mode: return to previous position
                 this.returnToSavedTrack();
@@ -712,11 +762,13 @@ Module.register("MMM-SoundCloud", {
             // Reload a global track
             this.currentGlobalTrack = entry.trackInfo;
             this.isPlayingSearched = true;
+            this.isLoadingTrack = true;
 
             this.widget.load(entry.trackUrl, {
                 auto_play: true,
                 show_artwork: this.config.showArtwork,
                 callback: () => {
+                    this.isLoadingTrack = false;
                     this.widget.setVolume(this.volume);
                     Log.info("MMM-SoundCloud: History - loaded global track: " + entry.trackInfo.title);
                 }
@@ -727,10 +779,13 @@ Module.register("MMM-SoundCloud", {
             if (this.isPlayingSearched) {
                 this.isPlayingSearched = false;
                 const playlistUrl = this.savedPlaylistUrl;
+                this.isLoadingTrack = true;
+
                 this.widget.load(playlistUrl, {
                     auto_play: true,
                     show_artwork: this.config.showArtwork,
                     callback: () => {
+                        this.isLoadingTrack = false;
                         setTimeout(() => {
                             this.widget.skip(entry.index);
                             this.widget.setVolume(this.volume);
@@ -1060,10 +1115,13 @@ Module.register("MMM-SoundCloud", {
             this.globalTrackHistory.push(payload.track.id);
 
             // Load the track into the widget
+            this.isLoadingTrack = true;
+
             this.widget.load(trackUrl, {
                 auto_play: true,
                 show_artwork: this.config.showArtwork,
                 callback: () => {
+                    this.isLoadingTrack = false;
                     Log.info("MMM-SoundCloud: External track loaded successfully");
                     // Set volume
                     this.widget.setVolume(this.volume);
@@ -1233,10 +1291,13 @@ Module.register("MMM-SoundCloud", {
             if (needReloadPlaylist && playlistUrl) {
                 // Load the original playlist
                 Log.info("MMM-SoundCloud: Reloading original playlist: " + playlistUrl);
+                this.isLoadingTrack = true;
+
                 this.widget.load(playlistUrl, {
                     auto_play: true,
                     show_artwork: this.config.showArtwork,
                     callback: () => {
+                        this.isLoadingTrack = false;
                         Log.info("MMM-SoundCloud: Playlist reloaded, playing track " + savedIndex + " from beginning");
                         // After playlist loads, skip to saved track and play from start
                         setTimeout(() => {
@@ -1296,14 +1357,19 @@ Module.register("MMM-SoundCloud", {
     playNextRelatedTrack: function () {
         if (!this.currentGlobalTrack) {
             Log.warn("MMM-SoundCloud: No current track info for related search");
-            // Fallback to album behavior
             if (this.isPlayingSearched) {
                 this.returnToSavedTrack();
             }
             return;
         }
 
-        // Also try to get genre/tags from current widget sound
+        // Guard: don't send duplicate requests
+        if (this.isSearchingRelated) {
+            Log.info("MMM-SoundCloud: Already searching for related track, skipping");
+            return;
+        }
+        this.isSearchingRelated = true;
+
         if (this.widget) {
             this.widget.getCurrentSound((sound) => {
                 const trackInfo = {
@@ -1321,18 +1387,17 @@ Module.register("MMM-SoundCloud", {
 
     // Handle related track result from node_helper
     handleRelatedTrackResult: function (payload) {
+        this.isSearchingRelated = false; // Allow new searches
+
         if (payload.success && payload.track) {
             // Check if we already played this track recently
             if (this.globalTrackHistory.includes(payload.track.id)) {
                 Log.info("MMM-SoundCloud: Related track already played, requesting another");
-                // Request another one (will get a different random pick)
-                if (this.globalTrackHistory.length < 50) {
-                    this.playNextRelatedTrack();
-                } else {
-                    // Too many tracks played, reset history
+                if (this.globalTrackHistory.length >= 50) {
                     this.globalTrackHistory = [];
-                    this.playNextRelatedTrack();
                 }
+                // Retry with a small delay to avoid tight loop
+                setTimeout(() => this.playNextRelatedTrack(), 500);
                 return;
             }
 
@@ -1352,11 +1417,15 @@ Module.register("MMM-SoundCloud", {
             // Keep isPlayingSearched true so global mode continues chaining
             this.isPlayingSearched = true;
 
+            // Set loading guard BEFORE widget.load to prevent re-entrant FINISH
+            this.isLoadingTrack = true;
+
             // Load the related track into widget
             this.widget.load(trackUrl, {
                 auto_play: true,
                 show_artwork: this.config.showArtwork,
                 callback: () => {
+                    this.isLoadingTrack = false;
                     Log.info("MMM-SoundCloud: Related track loaded successfully");
                     this.widget.setVolume(this.volume);
 
@@ -1379,6 +1448,148 @@ Module.register("MMM-SoundCloud", {
             }
         }
     },
+
+    // === PRELOAD CACHE SYSTEM ===
+
+    // Preload next track in background while current track is playing
+    preloadNextTrack: function () {
+        if (this.isPreloading || !this.currentGlobalTrack) return;
+
+        // Don't preload if we already have one cached
+        if (this.preloadedTrack) {
+            Log.info("MMM-SoundCloud: Already have preloaded track: " + this.preloadedTrack.title);
+            return;
+        }
+
+        this.isPreloading = true;
+        Log.info("MMM-SoundCloud: Preloading next track in background...");
+
+        if (this.widget) {
+            this.widget.getCurrentSound((sound) => {
+                const trackInfo = {
+                    trackId: this.currentGlobalTrack.id,
+                    genre: (sound && sound.genre) || this.currentGlobalTrack.genre || "",
+                    tags: (sound && sound.tag_list) || this.currentGlobalTrack.tag_list || "",
+                    title: this.currentGlobalTrack.title || "",
+                    excludeIds: this.globalTrackHistory.slice() // Send played IDs to avoid duplicates
+                };
+
+                this.sendSocketNotification("PRELOAD_NEXT", trackInfo);
+            });
+        }
+    },
+
+    // Handle preloaded track result from node_helper
+    handlePreloadResult: function (payload) {
+        this.isPreloading = false;
+
+        if (payload.success && payload.track) {
+            // Check if already in history
+            if (this.globalTrackHistory.includes(payload.track.id)) {
+                Log.info("MMM-SoundCloud: Preloaded track already played, requesting another");
+                this.preloadedTrack = null;
+                // Try again
+                setTimeout(() => {
+                    this.isPreloading = false;
+                    this.preloadNextTrack();
+                }, 1000);
+                return;
+            }
+
+            this.preloadedTrack = payload.track;
+            Log.info("MMM-SoundCloud: Preloaded next track: " + payload.track.title + " by " + payload.track.artist);
+        } else {
+            this.preloadedTrack = null;
+            Log.warn("MMM-SoundCloud: Failed to preload next track: " + (payload.error || "unknown"));
+        }
+    },
+
+    // Play the preloaded/cached track instantly
+    playPreloadedTrack: function () {
+        if (!this.preloadedTrack) {
+            // Fallback to regular search
+            this.playNextRelatedTrack();
+            return;
+        }
+
+        const track = this.preloadedTrack;
+        this.preloadedTrack = null; // Clear cache
+
+        Log.info("MMM-SoundCloud: Playing preloaded track: " + track.title);
+
+        // Update global track info
+        this.currentGlobalTrack = {
+            id: track.id,
+            title: track.title,
+            artist: track.artist,
+            genre: track.genre || "",
+            tag_list: track.tag_list || ""
+        };
+        this.globalTrackHistory.push(track.id);
+        this.isPlayingSearched = true;
+
+        // Set loading guard BEFORE widget.load
+        this.isLoadingTrack = true;
+
+        // Load instantly
+        this.widget.load(track.permalink_url, {
+            auto_play: true,
+            show_artwork: this.config.showArtwork,
+            callback: () => {
+                this.isLoadingTrack = false;
+                Log.info("MMM-SoundCloud: Preloaded track loaded and playing");
+                this.widget.setVolume(this.volume);
+
+                this.sendNotification("MUSIC_TRACK_CHANGED", {
+                    title: track.title,
+                    artist: track.artist,
+                    artwork: track.artwork_url,
+                    source: "global-preloaded"
+                });
+            }
+        });
+    },
+
+    // === MOOD / GENRE MUSIC SEARCH ===
+
+    // Play music by mood, genre, or theme (triggered by AI)
+    playByMood: function (mood) {
+        if (!this.widget || !this.widgetReady) {
+            Log.error("MMM-SoundCloud: Widget not ready for mood search");
+            return;
+        }
+
+        Log.info("MMM-SoundCloud: Playing by mood/theme: " + mood);
+
+        // Switch to global mode for continuous playback
+        if (this.playMode !== "global") {
+            this.togglePlayMode();
+        }
+
+        // Save current state before switching
+        this.widget.getCurrentSoundIndex((currentIndex) => {
+            const savedState = {
+                trackIndex: currentIndex,
+                position: this.currentPosition,
+                isPaused: this.isPaused,
+                playlistUrl: this.savedPlaylistUrl
+            };
+
+            // Reset global session for new mood
+            this.globalTrackHistory = [];
+            this.preloadedTrack = null;
+            this.isPreloading = false;
+
+            // Send mood search to node_helper
+            this.sendSocketNotification("SEARCH_MOOD", {
+                mood: mood,
+                savedState: savedState
+            });
+        });
+    },
+
+    // Handle mood search results (reuse SEARCH_RESULT handler)
+    // (Handled via SEARCH_RESULT notification from node_helper)
 
     // Get current state for LLM
     getState: function () {

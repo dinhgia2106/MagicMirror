@@ -761,6 +761,28 @@ class AgentTools:
             "message": f"Đang tìm và phát bài hát: {song_name}"
         }
     
+    def music_play_mood(self, mood: str) -> Dict[str, Any]:
+        """
+        Play music by mood, genre, theme or random.
+        Switches to Global mode for continuous auto-play of related tracks.
+        Args:
+            mood: Mood, genre, theme or description of music style.
+                  Examples: 'buồn', 'vui', 'chill', 'tết', 'random', 'jazz', 'lofi',
+                  'nhạc buồn', 'nhạc sôi động', 'workout music', 'sleep music'
+        """
+        if not mood or not mood.strip():
+            return {
+                "success": False,
+                "error": "Vui lòng mô tả thể loại hoặc tâm trạng nhạc"
+            }
+        
+        return {
+            "success": True,
+            "action": "MUSIC_PLAY_MOOD",
+            "data": {"mood": mood.strip()},
+            "message": f"Đang tìm và phát nhạc theo chủ đề: {mood}"
+        }
+    
     # ==================== UTILITY METHODS ====================
     
     def execute_tool(self, tool_name: str, arguments: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -790,6 +812,7 @@ class AgentTools:
             "music_volume": self.music_volume,
             "music_adjust_volume": self.music_adjust_volume,
             "music_search_play": self.music_search_play,
+            "music_play_mood": self.music_play_mood,
         }
         
         if tool_name not in tool_map:
@@ -1015,6 +1038,20 @@ TOOL_DECLARATIONS = [
                 }
             },
             "required": ["song_name"]
+        }
+    },
+    {
+        "name": "music_play_mood",
+        "description": "Phát nhạc theo tâm trạng, thể loại hoặc chủ đề. Tự động chuyển sang chế độ Global để phát liên tục các bài liên quan. Sử dụng khi user muốn nghe nhạc theo mood/genre/theme mà KHÔNG chỉ định tên bài cụ thể. Ví dụ: 'phát nhạc buồn', 'mở nhạc chill', 'bật nhạc tết', 'phát nhạc ngẫu nhiên', 'play some jazz', 'nhạc để ngủ', 'nhạc tập gym', 'nhạc sôi động'. KHÔNG dùng tool này khi user nói tên bài hát cụ thể (dùng music_search_play thay vì).",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "mood": {
+                    "type": "string",
+                    "description": "Mood, genre, theme or description. Examples: 'buồn', 'vui', 'chill', 'tết', 'random', 'jazz', 'lofi', 'workout', 'sleep', 'sôi động', 'lãng mạn'"
+                }
+            },
+            "required": ["mood"]
         }
     }
 ]
