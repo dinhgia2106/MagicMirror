@@ -519,6 +519,7 @@ class WakeWordService:
             "4. Khi người dùng nói 'quên đi' hoặc sửa thông tin cũ -> gọi memory_remove rồi memory_save.\n"
             "5. KHÔNG cần xin phép trước khi lưu -- hãy làm TỰ ĐỘNG và TỰ NHIÊN.\n"
             "6. Section phù hợp: 'user profile' cho thông tin cá nhân, 'learned facts' cho kiến thức, 'conversation notes' cho sự kiện/nhật ký.\n"
+            "7. Hỏi về gì dù có tool call cụ thể nhưng vẫn LUÔN kiểm tra PERSISTENT MEMORY ở trên xem có gì liên quan đến người dùng không (sinh nhật, sự kiện cá nhân, kỷ niệm). Nếu có, PHẢI đề cập.\n"
         )
 
     def _process_tts_queue(self):
