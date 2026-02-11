@@ -500,8 +500,16 @@ class WakeWordService:
             "1. Trò chuyện, dạy học (ngôn ngữ, kiến thức), và trả lời mọi câu hỏi của người dùng bằng kiến thức rộng lớn của bạn.\n"
             "2. Sử dụng các công cụ (tools) ĐƯỢC CUNG CẤP để tra cứu thời gian, thời tiết, ngày lễ, điều khiển nhạc KHI CẦN THIẾT.\n"
             "3. Giải đáp thắc mắc, tư vấn và hỗ trợ mọi vấn đề trong cuộc sống.\n"
-            "LƯU Ý: Bạn KHÔNG bị giới hạn chỉ trong các công cụ trên. Hãy thoải mái dạy ngoại ngữ, kể chuyện, làm thơ, hoặc thảo luận bất kỳ chủ đề nào người dùng muốn.\n"
-            "Hãy trả lời một cách tự nhiên, ngắn gọn và hữu ích hoàn toàn bằng tiếng Việt."
+            "LUU Ý: Bạn KHÔNG bị giới hạn chỉ trong các công cụ trên. Hãy thoải mái dạy ngoại ngữ, kể chuyện, làm thơ, hoặc thảo luận bất kỳ chủ đề nào người dùng muốn.\n"
+            "Hãy trả lời một cách tự nhiên, ngắn gọn và hữu ích hoàn toàn bằng tiếng Việt.\n"
+            "\n"
+            "KÝ ỨC CỰC BỘ (MEMORY):\n"
+            "- Bạn có khả năng LƯU TRỮ KÝ ỨC cực bộ qua file soul.md.\n"
+            "- Khi người dùng chia sẻ thông tin cá nhân (tên, sở thích, công việc, v.v.), " 
+            "hãy CHỦ ĐỘNG gọi tool memory_save để lưu lại.\n"
+            "- Khi người dùng hỏi 'bạn nhớ gì về tôi?' hoặc tương tự, gọi memory_list.\n"
+            "- Khi người dùng nói 'quên đi' hoặc sửa thông tin cũ, gọi memory_remove rồi memory_save.\n"
+            "- KHÔNG cần xin phép trước khi lưu ký ức -- hãy làm tự động và tự nhiên."
         )
 
     def _process_tts_queue(self):
@@ -1102,11 +1110,13 @@ class WakeWordService:
             now_str = datetime.datetime.now().strftime("%A, %d/%m/%Y %H:%M:%S")
             
             system_instruction = f"""{self.system_prompt}
+{self.agent_tools.memory.get_prompt_context()}
 THONG TIN HIEN TAI: {now_str}
 QUY TAC PHAN HOI:
 - KHONG su dung dinh dang markdown (nhu *, _, `).
 - Luon su dung cac cong cu (tools) duoc cung cap de tra cuu thoi tiet hoac cac ngay le neu can.
-- Neu thong tin hien tai co ve khong chinh xac, hay chu dong kiem tra lai bang cong cu."""
+- Neu thong tin hien tai co ve khong chinh xac, hay chu dong kiem tra lai bang cong cu.
+- Khi nguoi dung chia se thong tin ca nhan, hay TU DONG goi memory_save ma KHONG can hoi lai."""
 
             # Build conversation history for the new SDK format
             history = []
