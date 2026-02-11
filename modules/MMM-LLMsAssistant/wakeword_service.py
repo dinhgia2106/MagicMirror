@@ -1134,6 +1134,14 @@ QUY TAC PHAN HOI:
                 role = "user" if msg["role"] == "user" else "model"
                 history.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
             
+            # Safety settings - prevent silent blocking of responses
+            safety_settings = [
+                types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="BLOCK_NONE"),
+                types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="BLOCK_NONE"),
+            ]
+            
             # Create chat session
             chat = client.chats.create(
                 model='gemini-2.5-flash',
@@ -1141,7 +1149,9 @@ QUY TAC PHAN HOI:
                     system_instruction=system_instruction,
                     tools=[get_gemini_tools()],
                     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                    max_output_tokens=2048
+                    max_output_tokens=2048,
+                    temperature=0.7,
+                    safety_settings=safety_settings
                 ),
                 history=history
             )
@@ -1184,6 +1194,20 @@ QUY TAC PHAN HOI:
                         pass  # chunk.text raises ValueError when response has function calls
             
             self.emit("debug", message=f"Stream finished: {chunk_count} chunks, {len(function_calls)} function calls, text len={len(full_text)}, finish_reason={last_finish_reason}")
+            
+            # Log safety ratings if response is empty (helps diagnose silent blocks)
+            if not full_text and not function_calls and chunk_count > 0:
+                try:
+                    last_chunk = chunk  # Last chunk from the for loop
+                    if hasattr(last_chunk, 'candidates') and last_chunk.candidates:
+                        candidate = last_chunk.candidates[0]
+                        if hasattr(candidate, 'safety_ratings') and candidate.safety_ratings:
+                            ratings = [(r.category, r.probability) for r in candidate.safety_ratings]
+                            self.emit("debug", message=f"Safety ratings: {ratings}")
+                    if hasattr(last_chunk, 'prompt_feedback') and last_chunk.prompt_feedback:
+                        self.emit("debug", message=f"Prompt feedback: {last_chunk.prompt_feedback}")
+                except Exception as diag_err:
+                    self.emit("debug", message=f"Diagnostic error: {diag_err}")
             
             # If there were function calls, execute them and get the final answer
             if function_calls:
@@ -1292,22 +1316,51 @@ QUY TAC PHAN HOI:
             else:
                 self.emit("debug", message=f"WARNING: No text response from Gemini (finish_reason={last_finish_reason})")
                 
-                # Retry once with non-streaming if completely empty
-                self.emit("debug", message="Retrying with non-streaming request...")
+                # Retry with a fresh direct API call (not the same chat session)
+                # Using a direct generate_content call avoids chat session state issues
+                self.emit("debug", message="Retrying with direct API call (non-streaming, fresh context)...")
                 try:
-                    retry_response = chat.send_message(text)
+                    # Build contents from conversation history for a fresh call
+                    retry_contents = []
+                    for msg in self.conversation.history:
+                        role = "user" if msg["role"] == "user" else "model"
+                        retry_contents.append(types.Content(role=role, parts=[types.Part.from_text(text=msg["content"])]))
+                    
+                    # Add a nudge to encourage response
+                    if retry_contents and retry_contents[-1].role == "user":
+                        # Replace last user message with a slightly modified version
+                        retry_contents[-1] = types.Content(
+                            role="user",
+                            parts=[types.Part.from_text(text=f"{text}\n(Hãy trả lời bằng tiếng Việt.)")]
+                        )
+                    
+                    retry_response = client.models.generate_content(
+                        model='gemini-2.5-flash',
+                        contents=retry_contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=system_instruction,
+                            tools=[get_gemini_tools()],
+                            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                            max_output_tokens=2048,
+                            temperature=0.9,
+                            safety_settings=safety_settings
+                        )
+                    )
+                    
                     # Check for function calls in retry
                     retry_fc = []
                     if retry_response.candidates and retry_response.candidates[0].content and retry_response.candidates[0].content.parts:
                         for part in retry_response.candidates[0].content.parts:
                             if hasattr(part, 'function_call') and part.function_call:
                                 retry_fc.append(part.function_call)
+                            elif hasattr(part, 'text') and part.text:
+                                full_text += part.text
                     
                     if retry_fc:
                         self.emit("debug", message=f"Retry found {len(retry_fc)} function call(s)")
                         self.emit("tool_call", tool_name=retry_fc[0].name)
                         # Execute retry function calls
-                        function_responses = []
+                        function_responses_parts = []
                         for fc in retry_fc:
                             tool_name = fc.name
                             tool_args = dict(fc.args) if fc.args else {}
@@ -1317,18 +1370,35 @@ QUY TAC PHAN HOI:
                             if result.get("action") and result["action"].startswith("MUSIC_"):
                                 self.emit("music_action", action=result["action"], data=result.get("data", {}))
                                 music_tool_called = True
-                            function_responses.append(
+                            function_responses_parts.append(
                                 types.Part.from_function_response(
                                     name=tool_name,
                                     response={"result": json.dumps(result, ensure_ascii=False)}
                                 )
                             )
-                        # Get final text from tool results
-                        final_resp = chat.send_message(function_responses)
+                        # Get final text from tool results via fresh call
+                        # Build full context with tool call and response for the follow-up
+                        tool_call_content = types.Content(
+                            role="model",
+                            parts=[types.Part.from_function_call(name=fc.name, args=dict(fc.args) if fc.args else {}) for fc in retry_fc]
+                        )
+                        tool_response_content = types.Content(
+                            role="user",
+                            parts=function_responses_parts
+                        )
+                        final_contents = retry_contents + [tool_call_content, tool_response_content]
+                        final_resp = client.models.generate_content(
+                            model='gemini-2.5-flash',
+                            contents=final_contents,
+                            config=types.GenerateContentConfig(
+                                system_instruction=system_instruction,
+                                max_output_tokens=2048,
+                                temperature=0.9,
+                                safety_settings=safety_settings
+                            )
+                        )
                         if final_resp.text:
                             full_text = final_resp.text
-                    elif retry_response.text:
-                        full_text = retry_response.text
                     
                     if full_text:
                         clean_text = self.clean_text_for_tts(full_text)
