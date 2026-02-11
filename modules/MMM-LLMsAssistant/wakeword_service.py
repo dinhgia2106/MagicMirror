@@ -877,7 +877,12 @@ class WakeWordService:
                 self.emit("error", message=str(e))
                 if consecutive_errors >= max_consecutive_errors:
                     self.emit("debug", message="Too many consecutive errors, ending conversation")
-                break
+                    break
+                # Fallback: go back to activated (blue) state and retry listening
+                self.emit("debug", message=f"Recoverable error ({consecutive_errors}/{max_consecutive_errors}), retrying...")
+                self.emit("listening")  # Signal frontend to show blue (activated) state
+                time.sleep(0.3)  # Brief pause before retry
+                continue
         
         # Ensure wake word monitor is stopped when conversation ends
         self._stop_wakeword_monitor()

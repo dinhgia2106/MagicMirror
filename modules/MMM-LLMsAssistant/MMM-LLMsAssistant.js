@@ -131,8 +131,13 @@ Module.register("MMM-LLMsAssistant", {
 
             case "ERROR":
                 Log.error("MMM-LLMsAssistant Error:", payload);
-                this.state = "idle";
-                this.isConversationActive = false;
+                // If conversation is active, fallback to blue (activated) instead of gray (idle)
+                if (this.isConversationActive) {
+                    this.state = "activated";
+                } else {
+                    this.state = "idle";
+                    this.isConversationActive = false;
+                }
                 this.updateDom(300);
                 break;
 
