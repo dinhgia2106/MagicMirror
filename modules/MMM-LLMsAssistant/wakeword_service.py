@@ -471,6 +471,9 @@ class WakeWordService:
         self.microphone = None  # Will be initialized in start()
         self.streaming_player = None  # Detected in start() for low-latency TTS
         
+        # Manual activation via stdin (click on orb)
+        self.manual_activate_event = threading.Event()
+        
         # Speech recognition tuning - matched to PvRecorderMicrophone VAD settings
         # These are backup settings; primary VAD is in PvRecorderMicrophone
         self.recognizer.pause_threshold = 0.8   # Reduced from 1.5 for faster response
@@ -640,6 +643,17 @@ class WakeWordService:
         # Use ASCII-only JSON output
         print(json.dumps(event, ensure_ascii=True), flush=True)
         
+    def _stdin_listener(self):
+        """Background thread to listen for commands from Node.js via stdin"""
+        try:
+            for line in sys.stdin:
+                command = line.strip()
+                if command == "ACTIVATE":
+                    print("Manual activation received via stdin", file=sys.stderr)
+                    self.manual_activate_event.set()
+        except Exception:
+            pass  # stdin closed or error
+
     def start(self):
         """Start wake word detection"""
         try:
@@ -684,7 +698,18 @@ class WakeWordService:
             
             print(f"Listening for wake word... (sample rate: {self.porcupine.sample_rate})", file=sys.stderr)
             
+            # Start stdin listener for manual activation from frontend
+            stdin_thread = threading.Thread(target=self._stdin_listener, daemon=True)
+            stdin_thread.start()
+            
             while True:
+                # Check for manual activation (user clicked orb)
+                if self.manual_activate_event.is_set():
+                    self.manual_activate_event.clear()
+                    self.emit("wake_word")
+                    self.handle_wake_word()
+                    continue
+                
                 pcm = self.recorder.read()
                 keyword_index = self.porcupine.process(pcm)
                 

@@ -20,17 +20,68 @@ Module.register("MMM-LLMsAssistant", {
         this.transcript = "";
         this.response = "";
         this.isConversationActive = false;
+        this.audioContext = null;
 
         this.sendSocketNotification("INIT", this.config);
+    },
+
+    /**
+     * Play a pleasant notification chime using Web Audio API
+     * when wake word is detected or user clicks the orb.
+     */
+    playActivationSound: function () {
+        try {
+            if (!this.audioContext) {
+                this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            const ctx = this.audioContext;
+            const now = ctx.currentTime;
+
+            // Two-tone chime: C5 then E5
+            const frequencies = [523.25, 659.25];
+            const duration = 0.12;
+
+            frequencies.forEach((freq, i) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(freq, now);
+                gain.gain.setValueAtTime(0, now + i * duration);
+                gain.gain.linearRampToValueAtTime(1, now + i * duration + 0.02);
+                gain.gain.exponentialRampToValueAtTime(0.001, now + i * duration + duration);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(now + i * duration);
+                osc.stop(now + i * duration + duration);
+            });
+        } catch (e) {
+            Log.warn("MMM-LLMsAssistant: Could not play activation sound", e);
+        }
     },
 
     getDom: function () {
         const wrapper = document.createElement("div");
         wrapper.className = "llms-assistant";
 
-        // Status indicator orb only
+        // Status indicator orb - clickable to activate AI
         const statusOrb = document.createElement("div");
         statusOrb.className = `assistant-orb ${this.state}`;
+        statusOrb.title = this.state === "idle" ? "Click to activate assistant" : this.getStatusText();
+
+        // Click handler - only activate when idle
+        if (this.state === "idle") {
+            statusOrb.style.cursor = "pointer";
+            statusOrb.addEventListener("click", () => {
+                this.playActivationSound();
+                this.state = "activated";
+                this.transcript = "";
+                this.response = "";
+                this.isConversationActive = true;
+                this.updateDom(300);
+                this.sendSocketNotification("MANUAL_ACTIVATE", {});
+            });
+        }
+
         wrapper.appendChild(statusOrb);
 
         return wrapper;
@@ -55,6 +106,7 @@ Module.register("MMM-LLMsAssistant", {
                 this.transcript = "";
                 this.response = "";
                 this.isConversationActive = true;
+                this.playActivationSound();
                 this.updateDom(300);
                 break;
 

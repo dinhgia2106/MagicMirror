@@ -14,6 +14,15 @@
     border: 2px solid #0f3460;
     transition: all 0.3s ease;
     position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.assistant-orb.idle:hover {
+    border-color: #00d9ff;
+    box-shadow: 0 0 15px rgba(0, 217, 255, 0.3);
+    transform: scale(1.08);
 }
 
 .assistant-orb::before {

@@ -31,6 +31,16 @@ module.exports = NodeHelper.create({
             this.initialized = true;
             this.config = payload;
             this.startWakeWordDetection();
+        } else if (notification === "MANUAL_ACTIVATE") {
+            // User clicked the orb to manually activate AI
+            if (this.porcupineProcess && this.porcupineProcess.stdin) {
+                try {
+                    this.porcupineProcess.stdin.write("ACTIVATE\n");
+                    console.log("[MMM-LLMsAssistant] Manual activation sent to Python process");
+                } catch (e) {
+                    console.error("[MMM-LLMsAssistant] Failed to send manual activation:", e);
+                }
+            }
         }
     },
 
