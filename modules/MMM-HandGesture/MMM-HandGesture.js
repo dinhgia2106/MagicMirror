@@ -5,8 +5,9 @@
 
 Module.register("MMM-HandGesture", {
     defaults: {
-        smoothingFactor: 0.4,     // 0 = no smoothing, higher = more lag but smoother
+        smoothingFactor: 0.15,    // Lower = more responsive, higher = smoother
         pinchThreshold: 0.06,     // Normalized distance to detect pinch
+        pinchReleaseThreshold: 0.08, // Must exceed this to release pinch (hysteresis)
         clickMaxDistance: 15,     // Max px movement to count as click (vs drag)
         cursorSize: 20,           // Cursor diameter in px
         hideDelay: 500,           // Ms before hiding cursor when no hand detected
@@ -21,6 +22,7 @@ Module.register("MMM-HandGesture", {
         WRIST: 0,
         THUMB_TIP: 4,
         INDEX_MCP: 5,
+        INDEX_PIP: 6,
         INDEX_TIP: 8,
         MIDDLE_TIP: 12,
         RING_TIP: 16,
@@ -53,9 +55,11 @@ Module.register("MMM-HandGesture", {
         this.gestureState = this.STATE.IDLE;
         this.cursorVisible = false;
 
-        // Pinch tracking
+        // Pinch tracking - freeze cursor position at pinch start
         this.pinchStartX = 0;
         this.pinchStartY = 0;
+        this.pinchAnchorNormX = 0;  // Normalized wrist position at pinch start
+        this.pinchAnchorNormY = 0;
         this.pinchMoveDistance = 0;
 
         // Timing
@@ -238,12 +242,11 @@ Module.register("MMM-HandGesture", {
     // Process hand landmark results
     processResults: function (results) {
         if (!results || !results.landmarks || results.landmarks.length === 0) {
-            // No hand detected
             this.onHandLost();
             return;
         }
 
-        const landmarks = results.landmarks[0]; // First hand
+        const landmarks = results.landmarks[0];
         this.lastHandTime = Date.now();
 
         // Clear hide timer
@@ -254,6 +257,7 @@ Module.register("MMM-HandGesture", {
 
         // Get key landmark positions
         const indexTip = landmarks[this.LANDMARKS.INDEX_TIP];
+        const indexPip = landmarks[this.LANDMARKS.INDEX_PIP];
         const thumbTip = landmarks[this.LANDMARKS.THUMB_TIP];
         const indexMcp = landmarks[this.LANDMARKS.INDEX_MCP];
         const middleTip = landmarks[this.LANDMARKS.MIDDLE_TIP];
@@ -262,45 +266,68 @@ Module.register("MMM-HandGesture", {
         const middleMcp = landmarks[this.LANDMARKS.MIDDLE_MCP];
         const ringMcp = landmarks[this.LANDMARKS.RING_MCP];
         const pinkyMcp = landmarks[this.LANDMARKS.PINKY_MCP];
+        const wrist = landmarks[this.LANDMARKS.WRIST];
 
-        // Map index fingertip to screen coordinates
-        let screenX = indexTip.x * window.innerWidth;
-        let screenY = indexTip.y * window.innerHeight;
+        // Calculate pinch distance (thumb tip to index tip)
+        const pinchDist = this.distance(thumbTip, indexTip);
 
-        // Flip X if configured (mirror mode)
-        if (this.config.flipX) {
-            screenX = window.innerWidth - screenX;
+        // Hysteresis: use different thresholds for entering vs leaving pinch
+        const wasPinching = this.gestureState === this.STATE.PINCHING || this.gestureState === this.STATE.DRAGGING;
+        const isPinching = wasPinching
+            ? pinchDist < this.config.pinchReleaseThreshold
+            : pinchDist < this.config.pinchThreshold;
+
+        // --- Cursor position logic ---
+        // While pinching/dragging: freeze cursor at pinch start, offset by wrist movement
+        // While pointing: track index PIP (more stable than fingertip)
+        if (isPinching && (this.gestureState === this.STATE.PINCHING || this.gestureState === this.STATE.DRAGGING)) {
+            // Track wrist movement relative to pinch start anchor
+            let wristNormX = wrist.x;
+            if (this.config.flipX) wristNormX = 1 - wristNormX;
+
+            const driftX = (wristNormX - this.pinchAnchorNormX) * window.innerWidth;
+            const driftY = (wrist.y - this.pinchAnchorNormY) * window.innerHeight;
+
+            this.cursorX = Math.max(0, Math.min(window.innerWidth, this.pinchStartX + driftX));
+            this.cursorY = Math.max(0, Math.min(window.innerHeight, this.pinchStartY + driftY));
+
+            // Update smooth position to match (no lerp during pinch)
+            this.smoothX = this.cursorX;
+            this.smoothY = this.cursorY;
+        } else {
+            // Use INDEX_PIP (joint above fingertip) for more stable cursor positioning
+            // It moves less when the finger curls for pinch
+            let rawX = indexPip.x * window.innerWidth;
+            let rawY = indexPip.y * window.innerHeight;
+
+            if (this.config.flipX) {
+                rawX = window.innerWidth - rawX;
+            }
+
+            // Exponential smoothing
+            const alpha = 1 - this.config.smoothingFactor;
+            this.smoothX = this.smoothX + (rawX - this.smoothX) * alpha;
+            this.smoothY = this.smoothY + (rawY - this.smoothY) * alpha;
+
+            this.cursorX = Math.max(0, Math.min(window.innerWidth, this.smoothX));
+            this.cursorY = Math.max(0, Math.min(window.innerHeight, this.smoothY));
         }
 
-        // Apply smoothing
-        this.smoothX = this.smoothX + (screenX - this.smoothX) * (1 - this.config.smoothingFactor);
-        this.smoothY = this.smoothY + (screenY - this.smoothY) * (1 - this.config.smoothingFactor);
-
-        // Clamp to screen
-        this.cursorX = Math.max(0, Math.min(window.innerWidth, this.smoothX));
-        this.cursorY = Math.max(0, Math.min(window.innerHeight, this.smoothY));
-
-        // Check if index finger is extended (pointing up)
+        // Check if index finger is extended
         const indexExtended = indexTip.y < indexMcp.y;
 
         // Check if other fingers are folded
         const middleFolded = middleTip.y > middleMcp.y;
         const ringFolded = ringTip.y > ringMcp.y;
-        const pinkyFolded = pinkyTip.y > pinkyMcp.y;
 
-        // Calculate pinch distance (thumb tip to index tip)
-        const pinchDist = this.distance(thumbTip, indexTip);
-        const isPinching = pinchDist < this.config.pinchThreshold;
-
-        // Determine if hand is in pointing pose (index up, others folded)
+        // Determine if hand is in pointing pose
         const isPointing = indexExtended && (middleFolded || ringFolded);
 
-        // Show cursor if hand is detected
+        // Show cursor
         this.showCursor();
 
-        // Gesture state machine
+        // --- Gesture state machine ---
         if (!isPointing && !isPinching) {
-            // Open hand or no clear gesture - just track but go idle
             if (this.gestureState === this.STATE.DRAGGING) {
                 this.endDrag();
             } else if (this.gestureState === this.STATE.PINCHING) {
@@ -317,13 +344,13 @@ Module.register("MMM-HandGesture", {
                 if (isPointing && !isPinching) {
                     this.gestureState = this.STATE.POINTING;
                 } else if (isPinching) {
-                    this.startPinch();
+                    this.startPinch(wrist);
                 }
                 break;
 
             case this.STATE.POINTING:
                 if (isPinching) {
-                    this.startPinch();
+                    this.startPinch(wrist);
                 } else if (!isPointing) {
                     this.gestureState = this.STATE.IDLE;
                 }
@@ -334,7 +361,7 @@ Module.register("MMM-HandGesture", {
                     this.endPinch();
                     this.gestureState = isPointing ? this.STATE.POINTING : this.STATE.IDLE;
                 } else {
-                    // Check if moved enough to be a drag
+                    // Check if wrist moved enough to be a drag
                     const dx = this.cursorX - this.pinchStartX;
                     const dy = this.cursorY - this.pinchStartY;
                     this.pinchMoveDistance = Math.sqrt(dx * dx + dy * dy);
@@ -351,7 +378,6 @@ Module.register("MMM-HandGesture", {
                     this.endDrag();
                     this.gestureState = isPointing ? this.STATE.POINTING : this.STATE.IDLE;
                 } else {
-                    // Continue drag
                     this.dispatchMouseEvent("mousemove", this.cursorX, this.cursorY);
                 }
                 break;
@@ -361,22 +387,27 @@ Module.register("MMM-HandGesture", {
         this.updateCursorPosition();
     },
 
-    // Start pinch gesture
-    startPinch: function () {
+    // Start pinch gesture - lock cursor and record wrist anchor
+    startPinch: function (wrist) {
         this.gestureState = this.STATE.PINCHING;
+        // Freeze cursor at current position
         this.pinchStartX = this.cursorX;
         this.pinchStartY = this.cursorY;
         this.pinchMoveDistance = 0;
+
+        // Record wrist normalized position as anchor for drift tracking
+        this.pinchAnchorNormX = this.config.flipX ? (1 - wrist.x) : wrist.x;
+        this.pinchAnchorNormY = wrist.y;
     },
 
-    // End pinch - determine if it was a click or cancelled
+    // End pinch - determine if it was a click
     endPinch: function () {
         if (this.pinchMoveDistance < this.config.clickMaxDistance) {
-            // It was a click
-            this.dispatchMouseEvent("mousedown", this.cursorX, this.cursorY);
-            this.dispatchMouseEvent("mouseup", this.cursorX, this.cursorY);
-            this.dispatchMouseEvent("click", this.cursorX, this.cursorY);
-            Log.info("MMM-HandGesture: Click at (" + Math.round(this.cursorX) + ", " + Math.round(this.cursorY) + ")");
+            // Short pinch = click
+            this.dispatchMouseEvent("mousedown", this.pinchStartX, this.pinchStartY);
+            this.dispatchMouseEvent("mouseup", this.pinchStartX, this.pinchStartY);
+            this.dispatchMouseEvent("click", this.pinchStartX, this.pinchStartY);
+            Log.info("MMM-HandGesture: Click at (" + Math.round(this.pinchStartX) + ", " + Math.round(this.pinchStartY) + ")");
         }
     },
 
@@ -409,11 +440,11 @@ Module.register("MMM-HandGesture", {
         return Math.sqrt(dx * dx + dy * dy);
     },
 
-    // Update cursor position
+    // Update cursor position using transform (GPU accelerated)
     updateCursorPosition: function () {
         if (this.cursorElement) {
-            this.cursorElement.style.left = this.cursorX + "px";
-            this.cursorElement.style.top = this.cursorY + "px";
+            this.cursorElement.style.transform =
+                "translate3d(" + this.cursorX + "px, " + this.cursorY + "px, 0) translate(-50%, -50%)";
         }
     },
 
@@ -450,7 +481,6 @@ Module.register("MMM-HandGesture", {
         const target = document.elementFromPoint(x, y);
         if (!target) return;
 
-        // For mousedown, remember the drag target
         if (type === "mousedown") {
             this.dragTarget = target;
         }
