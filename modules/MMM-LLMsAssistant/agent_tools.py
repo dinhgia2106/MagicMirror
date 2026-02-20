@@ -792,6 +792,52 @@ class AgentTools:
             "message": f"Đang tìm và phát nhạc theo chủ đề: {mood}"
         }
     
+    def music_get_current_track(self) -> Dict[str, Any]:
+        """
+        Get information about the currently playing track.
+        Returns the track title, uploader name (note: on SoundCloud the uploader
+        is NOT necessarily the artist/singer, just the account that posted it).
+        """
+        try:
+            track_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "current_track.json")
+            if not os.path.exists(track_file):
+                return {
+                    "success": True,
+                    "data": {
+                        "playing": False,
+                        "message": "Kh\u00f4ng c\u00f3 th\u00f4ng tin b\u00e0i h\u00e1t. C\u00f3 th\u1ec3 ch\u01b0a ph\u00e1t nh\u1ea1c."
+                    }
+                }
+            
+            with open(track_file, 'r', encoding='utf-8') as f:
+                track_data = json.load(f)
+            
+            title = track_data.get("title", "")
+            uploader = track_data.get("artist", "")
+            
+            if not title:
+                return {
+                    "success": True,
+                    "data": {
+                        "playing": False,
+                        "message": "Kh\u00f4ng c\u00f3 th\u00f4ng tin b\u00e0i h\u00e1t."
+                    }
+                }
+            
+            return {
+                "success": True,
+                "data": {
+                    "playing": True,
+                    "title": title,
+                    "uploader": uploader,
+                    "note": "uploader is the SoundCloud account that posted the track, NOT necessarily the original artist or singer",
+                    "artwork": track_data.get("artwork", ""),
+                    "formatted_vi": f"B\u00e0i \u0111ang ph\u00e1t: {title}" + (f" (\u0111\u0103ng b\u1edfi {uploader})" if uploader else "")
+                }
+            }
+        except Exception as e:
+            return {"success": False, "error": f"Error reading track info: {str(e)}"}
+    
     # ==================== MEMORY TOOLS ====================
     
     def memory_save(self, section: str, content: str) -> Dict[str, Any]:
@@ -1115,6 +1161,7 @@ class AgentTools:
             "music_adjust_volume": self.music_adjust_volume,
             "music_search_play": self.music_search_play,
             "music_play_mood": self.music_play_mood,
+            "music_get_current_track": self.music_get_current_track,
             # Memory tools
             "memory_save": self.memory_save,
             "memory_list": self.memory_list,
@@ -1361,6 +1408,15 @@ TOOL_DECLARATIONS = [
                 }
             },
             "required": ["mood"]
+        }
+    },
+    {
+        "name": "music_get_current_track",
+        "description": "Lấy thông tin bài hát đang phát hiện tại. Sử dụng khi người dùng hỏi 'bài gì đang phát', 'đang nghe bài gì', 'bài này tên gì', 'ai hát bài này', 'what song is playing', 'tên bài hát'.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
         }
     },
     # Memory tools

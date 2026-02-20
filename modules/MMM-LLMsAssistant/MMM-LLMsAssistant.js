@@ -99,6 +99,13 @@ Module.register("MMM-LLMsAssistant", {
         }
     },
 
+    notificationReceived: function (notification, payload, sender) {
+        // Listen for track changes from MMM-SoundCloud
+        if (notification === "MUSIC_TRACK_CHANGED" && payload) {
+            this.sendSocketNotification("SAVE_CURRENT_TRACK", payload);
+        }
+    },
+
     socketNotificationReceived: function (notification, payload) {
         switch (notification) {
             case "WAKE_WORD_DETECTED":

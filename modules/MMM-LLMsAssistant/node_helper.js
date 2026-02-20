@@ -41,6 +41,21 @@ module.exports = NodeHelper.create({
                     console.error("[MMM-LLMsAssistant] Failed to send manual activation:", e);
                 }
             }
+        } else if (notification === "SAVE_CURRENT_TRACK") {
+            // Save current track info to JSON file for Python to read
+            const fs = require("fs");
+            const trackFile = path.join(__dirname, "current_track.json");
+            try {
+                const trackData = {
+                    title: payload.title || "",
+                    artist: payload.artist || "",
+                    artwork: payload.artwork || "",
+                    timestamp: Date.now()
+                };
+                fs.writeFileSync(trackFile, JSON.stringify(trackData, null, 2), "utf8");
+            } catch (e) {
+                console.error("[MMM-LLMsAssistant] Failed to save current track:", e);
+            }
         }
     },
 

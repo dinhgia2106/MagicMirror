@@ -1223,6 +1223,9 @@ class WakeWordService:
                 return text_parts, func_calls, finish_reason
             
             for part in parts:
+                # Skip thinking/thought parts from gemini-2.5-flash
+                if getattr(part, 'thought', False):
+                    continue
                 # Check function_call using getattr to avoid truthiness issues
                 fc = getattr(part, 'function_call', None)
                 if fc is not None and getattr(fc, 'name', None):
@@ -1297,8 +1300,9 @@ Hay tom tat va tra loi cau hoi cua nguoi dung dua tren cac ket qua tren. Tra loi
                 model='gemini-2.5-flash',
                 contents=summary_prompt,
                 config=types.GenerateContentConfig(
-                    max_output_tokens=1024,
+                    max_output_tokens=4096,
                     temperature=0.7,
+                    thinking_config=types.ThinkingConfig(thinking_budget=1024)
                 )
             )
             
@@ -1363,9 +1367,10 @@ QUY TAC PHAN HOI:
                     system_instruction=system_instruction,
                     tools=[get_gemini_tools()],
                     automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                    max_output_tokens=2048,
+                    max_output_tokens=8192,
                     temperature=0.7,
-                    safety_settings=safety_settings
+                    safety_settings=safety_settings,
+                    thinking_config=types.ThinkingConfig(thinking_budget=2048)
                 ),
                 history=history
             )
@@ -1534,9 +1539,10 @@ QUY TAC PHAN HOI:
                             system_instruction=system_instruction,
                             tools=[get_gemini_tools()],
                             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
-                            max_output_tokens=2048,
+                            max_output_tokens=8192,
                             temperature=0.9,
-                            safety_settings=safety_settings
+                            safety_settings=safety_settings,
+                            thinking_config=types.ThinkingConfig(thinking_budget=2048)
                         )
                     )
                     
@@ -1586,9 +1592,10 @@ QUY TAC PHAN HOI:
                             contents=final_contents,
                             config=types.GenerateContentConfig(
                                 system_instruction=system_instruction,
-                                max_output_tokens=2048,
+                                max_output_tokens=8192,
                                 temperature=0.9,
-                                safety_settings=safety_settings
+                                safety_settings=safety_settings,
+                                thinking_config=types.ThinkingConfig(thinking_budget=2048)
                             )
                         )
                         if final_resp.text:
