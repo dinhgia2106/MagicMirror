@@ -517,7 +517,7 @@ class WakeWordService:
             "\n"
             "QUY TẮC LƯU KÝ ỨC (KHÔNG ĐƯỢC BỎ QUA):\n"
             "1. Khi người dùng KỂ CHUYỆN, CHIA SẺ sự kiện, cảm xúc, trải nghiệm, những điều muốn ghi nhớ lâu dài chứ không phải xã giao vu vơ -> GỌI memory_save NGAY LẬP TỨC, TRƯỚC KHI trả lời.\n"
-            "   Ví dụ: 'Hôm nay tôi bị vỡ gương xe' -> Gọi memory_save TRƯỚC, rồi mới hỏi han/động viên.\n"
+            "   Ví dụ: 'Hôm nay tôi bị gì đó...' -> Gọi memory_save TRƯỚC, rồi mới hỏi han/động viên.\n"
             "   Ví dụ: 'Tôi vừa đi du lịch Đà Lạt về' -> Gọi memory_save TRƯỚC, rồi mới hỏi chuyện.\n"
             "   Ví dụ: 'Tôi thích uống cà phê' -> Gọi memory_save TRƯỚC.\n"
             "   Ví dụ: 'Tôi là AI engineer' -> Gọi memory_save TRƯỚC.\n"
