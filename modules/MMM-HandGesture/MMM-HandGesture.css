@@ -1,0 +1,90 @@
+/* MMM-HandGesture - Virtual cursor and debug overlay styles */
+
+/* Virtual cursor dot */
+.hand-cursor {
+    position: fixed;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.8);
+    border: 2px solid rgba(255, 255, 255, 0.9);
+    box-shadow: 0 0 12px rgba(255, 255, 255, 0.5);
+    pointer-events: none;
+    z-index: 99999;
+    transform: translate(-50%, -50%);
+    transition: width 0.15s ease, height 0.15s ease, background 0.15s ease, opacity 0.3s ease;
+    opacity: 0;
+}
+
+.hand-cursor.visible {
+    opacity: 1;
+}
+
+/* Pinch feedback - cursor shrinks and changes color */
+.hand-cursor.pinching {
+    width: 14px;
+    height: 14px;
+    background: rgba(100, 200, 255, 0.9);
+    border-color: rgba(100, 200, 255, 1);
+    box-shadow: 0 0 18px rgba(100, 200, 255, 0.7);
+}
+
+/* Drag feedback */
+.hand-cursor.dragging {
+    width: 16px;
+    height: 16px;
+    background: rgba(255, 180, 100, 0.9);
+    border-color: rgba(255, 180, 100, 1);
+    box-shadow: 0 0 18px rgba(255, 180, 100, 0.7);
+}
+
+/* Hidden camera video element */
+.hand-gesture-video {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 1px;
+    height: 1px;
+    opacity: 0;
+    pointer-events: none;
+    z-index: -1;
+}
+
+/* Debug mode: show camera preview */
+.hand-gesture-video.debug {
+    width: 200px;
+    height: 150px;
+    opacity: 0.6;
+    top: 10px;
+    right: 10px;
+    left: auto;
+    z-index: 99998;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 6px;
+    transform: scaleX(-1);
+}
+
+/* Module wrapper - minimal since cursor is on body */
+.mmm-handgesture-wrapper {
+    display: none;
+}
+
+/* Status indicator */
+.hand-gesture-status {
+    position: fixed;
+    bottom: 10px;
+    right: 10px;
+    padding: 4px 10px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 99998;
+    opacity: 0;
+    transition: opacity 0.5s ease;
+}
+
+.hand-gesture-status.visible {
+    opacity: 1;
+}
