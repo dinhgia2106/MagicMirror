@@ -85,5 +85,3 @@ yarn.lock
 
 *.pyc
 backend\data
-*.ppn
-soul.md
