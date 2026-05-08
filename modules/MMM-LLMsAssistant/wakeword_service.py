@@ -62,6 +62,12 @@ except ImportError:
 # It works cross-platform (Windows, Linux ARM, etc.) via Microsoft Azure API
 # No local ML models needed, avoiding "Illegal instruction" errors on Pi
 
+def apply_mic_boost(pcm, boost_db=30):
+    """Apply dB boost to PCM audio data"""
+    multiplier = 10 ** (boost_db / 20)
+    audio_array = np.array(pcm, dtype=np.float32)
+    audio_array = audio_array * multiplier
+    return np.clip(audio_array, -32768, 32767).astype(np.int16)
 
 class PvRecorderMicrophone:
     """
@@ -192,7 +198,7 @@ class PvRecorderMicrophone:
             
             for _ in range(frames_needed):
                 pcm = self.recorder.read()
-                audio_array = np.array(pcm, dtype=np.int16)
+                audio_array = apply_mic_boost(pcm, 30)
                 energy = np.sqrt(np.mean(audio_array.astype(np.float64) ** 2))
                 energy_samples.append(energy)
             
@@ -278,7 +284,7 @@ class PvRecorderMicrophone:
             # Read audio from PvRecorder
             try:
                 pcm = self.recorder.read()
-                audio_array = np.array(pcm, dtype=np.int16)
+                audio_array = apply_mic_boost(pcm, 30)
             except Exception:
                 continue
             
@@ -711,7 +717,9 @@ class WakeWordService:
                     continue
                 
                 pcm = self.recorder.read()
-                keyword_index = self.porcupine.process(pcm)
+                # Apply 30dB boost for wake word processing
+                pcm_boosted = apply_mic_boost(pcm, 30).tolist()
+                keyword_index = self.porcupine.process(pcm_boosted)
                 
                 if keyword_index >= 0:
                     self.emit("wake_word")
