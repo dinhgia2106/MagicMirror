@@ -210,8 +210,9 @@ class PvRecorderMicrophone:
             
             for _ in range(frames_needed):
                 pcm = self.recorder.read()
-                audio_array = apply_mic_boost(pcm, 30)
-                energy = np.sqrt(np.mean(audio_array.astype(np.float64) ** 2))
+                # ONLY use RAW audio for calculating threshold
+                audio_array_raw = np.array(pcm, dtype=np.int16)
+                energy = np.sqrt(np.mean(audio_array_raw.astype(np.float64) ** 2))
                 energy_samples.append(energy)
             
             if not energy_samples:
@@ -296,22 +297,23 @@ class PvRecorderMicrophone:
             # Read audio from PvRecorder
             try:
                 pcm = self.recorder.read()
-                audio_array = apply_mic_boost(pcm, 30)
+                audio_array_raw = np.array(pcm, dtype=np.int16)
+                audio_array_boosted = apply_mic_boost(pcm, 30)
             except Exception:
                 continue
             
-            # Calculate energy (always needed for adaptive end-of-speech)
-            energy = np.sqrt(np.mean(audio_array.astype(np.float64) ** 2))
+            # Calculate energy on RAW AUDIO (always needed for adaptive end-of-speech)
+            energy = np.sqrt(np.mean(audio_array_raw.astype(np.float64) ** 2))
             energy_window.append(energy)
             if len(energy_window) > window_size:
                 energy_window.pop(0)
             smoothed_energy = np.mean(energy_window)
             
             # Speech detection: HYBRID approach
-            # - WebRTC VAD + energy must BOTH agree = speech (prevents noise false positives)
+            # - WebRTC VAD + energy on RAW AUDIO must BOTH agree = speech
             # - If WebRTC VAD unavailable, fall back to energy-only
             energy_says_speech = smoothed_energy > self.energy_threshold
-            vad_result = self._check_vad(audio_array)
+            vad_result = self._check_vad(audio_array_raw)
             
             if vad_result is not None:
                 # Hybrid: both VAD and energy must agree for speech start
@@ -335,11 +337,12 @@ class PvRecorderMicrophone:
                     if len(audio_buffer) > pre_buffer_chunks:
                         audio_buffer = audio_buffer[-pre_buffer_chunks:]
                 
-                audio_buffer.append(audio_array)
+                # Save the BOOSTED audio
+                audio_buffer.append(audio_array_boosted)
                 speech_chunks += 1
                 silent_chunks = 0
                 
-                # Track energy for adaptive end detection
+                # Track energy for adaptive end detection (using raw)
                 self.recent_speech_energies.append(smoothed_energy)
                 if len(self.recent_speech_energies) > 30:  # ~1 second window
                     self.recent_speech_energies.pop(0)
@@ -347,7 +350,8 @@ class PvRecorderMicrophone:
                     self.peak_speech_energy = smoothed_energy
             else:
                 if speech_started:
-                    audio_buffer.append(audio_array)
+                    # Save the BOOSTED audio
+                    audio_buffer.append(audio_array_boosted)
                     silent_chunks += 1
                     
                     # === ADAPTIVE END-OF-SPEECH DETECTION ===
@@ -383,7 +387,7 @@ class PvRecorderMicrophone:
                         break
                 else:
                     # Pre-speech buffer
-                    audio_buffer.append(audio_array)
+                    audio_buffer.append(audio_array_boosted)
                     max_buffer = int(1.5 / self.chunk_duration)  # Reduced pre-buffer
                     if len(audio_buffer) > max_buffer:
                         audio_buffer.pop(0)
