@@ -62,24 +62,99 @@ except ImportError:
 # It works cross-platform (Windows, Linux ARM, etc.) via Microsoft Azure API
 # No local ML models needed, avoiding "Illegal instruction" errors on Pi
 
-def apply_mic_boost(pcm, boost_db=30, noise_gate_threshold=200):
-    """Apply noise gate and dB boost to PCM audio data"""
-    audio_array = np.array(pcm, dtype=np.float32)
-    
-    # 1. Noise gate (lọc nhiễu nền): Giảm thiểu các âm thanh rất nhỏ (tiếng xì xèo)
-    # Các tín hiệu nhỏ hơn mức threshold (mặc định 200/32768) sẽ bị đè xuống gần 0
-    noise_mask = np.abs(audio_array) < noise_gate_threshold
-    audio_array[noise_mask] *= 0.05  # Giảm 95% âm lượng của nhiễu
-    
-    # Làm mượt (soft knee) ở đoạn giao giao giữa nhiễu và dải tiếng nói để tránh tiếng "bụp"
-    transition_mask = (np.abs(audio_array) >= noise_gate_threshold) & (np.abs(audio_array) < noise_gate_threshold * 2)
-    audio_array[transition_mask] *= 0.5
-    
-    # 2. Khuếch đại phần âm thanh thực sự
-    multiplier = 10 ** (boost_db / 20)
-    audio_array = audio_array * multiplier
-    
-    return np.clip(audio_array, -32768, 32767).astype(np.int16)
+
+class MicBoostProcessor:
+    """Stateful boost pipeline for I2S MEMS mics whose raw signal is too quiet.
+
+    Pipeline per frame:
+      1. 1-pole DC-block / HPF (removes I2S DC offset + sub-bass rumble)
+      2. Frame-RMS noise gate with hysteresis + attack/release envelope
+         (block-level, NOT per-sample, so fricatives stay intact)
+      3. Linear gain (boost_db)
+      4. tanh soft-clip (replaces hard clip to avoid distortion when loud)
+
+    Detection (VAD/energy threshold/Porcupine on raw) is unaffected — call this
+    only on the audio you actually want amplified (STT buffer, Porcupine input).
+    """
+
+    def __init__(self, sample_rate=16000, boost_db=30, hpf_cutoff_hz=80,
+                 default_noise_floor=80.0, closed_floor=0.05,
+                 open_ratio=2.5, close_ratio=1.5,
+                 attack_per_frame=1.0, release_per_frame=1.0/6.0):
+        self.sample_rate = sample_rate
+        self.gain = float(10 ** (boost_db / 20))
+
+        # IIR HPF: y[n] = x[n] - x[n-1] + R*y[n-1], pole at R = exp(-2π·fc/fs)
+        self.hpf_R = float(np.exp(-2.0 * np.pi * hpf_cutoff_hz / sample_rate))
+        self._hpf_x_prev = 0.0
+        self._hpf_y_prev = 0.0
+
+        # Gate thresholds derived from measured noise floor (RMS of raw int16)
+        self.noise_floor = float(default_noise_floor)
+        self.open_ratio = open_ratio
+        self.close_ratio = close_ratio
+        self._gate_open = False
+        self._gain_env = 0.0
+        self._closed_floor = closed_floor
+        self._attack = attack_per_frame
+        self._release = release_per_frame
+
+    def set_noise_floor(self, rms):
+        """Seed gate thresholds from measured ambient RMS (run on RAW audio)."""
+        if rms and rms > 0:
+            self.noise_floor = float(rms)
+
+    def reset(self):
+        self._hpf_x_prev = 0.0
+        self._hpf_y_prev = 0.0
+        self._gate_open = False
+        self._gain_env = 0.0
+
+    def process(self, audio_int16, gate_enabled=True):
+        if audio_int16 is None or len(audio_int16) == 0:
+            return audio_int16
+        x = np.asarray(audio_int16, dtype=np.float32)
+
+        # 1) DC-block / low-shelf rumble removal
+        R = self.hpf_R
+        x_prev = self._hpf_x_prev
+        y_prev = self._hpf_y_prev
+        y = np.empty_like(x)
+        for i in range(x.shape[0]):
+            yi = x[i] - x_prev + R * y_prev
+            y[i] = yi
+            x_prev = x[i]
+            y_prev = yi
+        self._hpf_x_prev = x_prev
+        self._hpf_y_prev = y_prev
+        x = y
+
+        # 2) Frame-level RMS gate with hysteresis (open > close prevents flutter)
+        if gate_enabled:
+            rms = float(np.sqrt(np.mean(x * x)))
+            open_th = self.noise_floor * self.open_ratio
+            close_th = self.noise_floor * self.close_ratio
+            if not self._gate_open and rms > open_th:
+                self._gate_open = True
+            elif self._gate_open and rms < close_th:
+                self._gate_open = False
+
+            target = 1.0 if self._gate_open else self._closed_floor
+            if target > self._gain_env:
+                self._gain_env = min(target, self._gain_env + self._attack)
+            else:
+                self._gain_env = max(target, self._gain_env - self._release)
+            x = x * self._gain_env
+
+        # 3) Linear gain
+        x = x * self.gain
+
+        # 4) Soft-clip: tanh saturates smoothly at ±32767 instead of hard cut
+        clip = 32767.0
+        x = np.tanh(x / clip) * clip
+
+        return x.astype(np.int16)
+
 
 class PvRecorderMicrophone:
     """
@@ -128,6 +203,9 @@ class PvRecorderMicrophone:
         # Statistics for adaptive adjustment
         self.recent_speech_energies = []  # Track energy levels during speech
         self.peak_speech_energy = 0       # Peak energy in current utterance
+
+        # Boost pipeline for STT (gate ON — clean speech, suppress hiss)
+        self.boost = MicBoostProcessor(sample_rate=sample_rate, boost_db=30)
     
     def start(self):
         """Start the recorder for speech capture"""
@@ -210,9 +288,8 @@ class PvRecorderMicrophone:
             
             for _ in range(frames_needed):
                 pcm = self.recorder.read()
-                # ONLY use RAW audio for calculating threshold
-                audio_array_raw = np.array(pcm, dtype=np.int16)
-                energy = np.sqrt(np.mean(audio_array_raw.astype(np.float64) ** 2))
+                audio_array = np.array(pcm, dtype=np.int16)
+                energy = np.sqrt(np.mean(audio_array.astype(np.float64) ** 2))
                 energy_samples.append(energy)
             
             if not energy_samples:
@@ -233,7 +310,10 @@ class PvRecorderMicrophone:
                 max(threshold_from_std, threshold_from_ratio),
                 80  # Absolute minimum threshold
             )
-            
+
+            # Seed boost gate with the measured RAW ambient floor
+            self.boost.set_noise_floor(median_energy)
+
             # Reset peak energy for new utterance
             self.peak_speech_energy = 0
             self.recent_speech_energies = []
@@ -297,23 +377,24 @@ class PvRecorderMicrophone:
             # Read audio from PvRecorder
             try:
                 pcm = self.recorder.read()
-                audio_array_raw = np.array(pcm, dtype=np.int16)
-                audio_array_boosted = apply_mic_boost(pcm, 30)
+                audio_array = np.array(pcm, dtype=np.int16)
+                # Boosted copy for the STT buffer; detection still uses raw below
+                audio_array_boosted = self.boost.process(audio_array, gate_enabled=True)
             except Exception:
                 continue
-            
-            # Calculate energy on RAW AUDIO (always needed for adaptive end-of-speech)
-            energy = np.sqrt(np.mean(audio_array_raw.astype(np.float64) ** 2))
+
+            # Calculate energy on RAW (boost would inflate the threshold)
+            energy = np.sqrt(np.mean(audio_array.astype(np.float64) ** 2))
             energy_window.append(energy)
             if len(energy_window) > window_size:
                 energy_window.pop(0)
             smoothed_energy = np.mean(energy_window)
-            
+
             # Speech detection: HYBRID approach
-            # - WebRTC VAD + energy on RAW AUDIO must BOTH agree = speech
+            # - WebRTC VAD + energy must BOTH agree = speech (prevents noise false positives)
             # - If WebRTC VAD unavailable, fall back to energy-only
             energy_says_speech = smoothed_energy > self.energy_threshold
-            vad_result = self._check_vad(audio_array_raw)
+            vad_result = self._check_vad(audio_array)
             
             if vad_result is not None:
                 # Hybrid: both VAD and energy must agree for speech start
@@ -336,13 +417,12 @@ class PvRecorderMicrophone:
                     pre_buffer_chunks = int(self.non_speaking_duration / self.chunk_duration)
                     if len(audio_buffer) > pre_buffer_chunks:
                         audio_buffer = audio_buffer[-pre_buffer_chunks:]
-                
-                # Save the BOOSTED audio
+
                 audio_buffer.append(audio_array_boosted)
                 speech_chunks += 1
                 silent_chunks = 0
                 
-                # Track energy for adaptive end detection (using raw)
+                # Track energy for adaptive end detection
                 self.recent_speech_energies.append(smoothed_energy)
                 if len(self.recent_speech_energies) > 30:  # ~1 second window
                     self.recent_speech_energies.pop(0)
@@ -350,7 +430,6 @@ class PvRecorderMicrophone:
                     self.peak_speech_energy = smoothed_energy
             else:
                 if speech_started:
-                    # Save the BOOSTED audio
                     audio_buffer.append(audio_array_boosted)
                     silent_chunks += 1
                     
@@ -492,6 +571,10 @@ class WakeWordService:
         self.recognizer = sr.Recognizer()
         self.microphone = None  # Will be initialized in start()
         self.streaming_player = None  # Detected in start() for low-latency TTS
+
+        # Boost for Porcupine — DC-block + gain + soft-clip, NO gate so the
+        # 'h' onset of "hey lens" isn't chopped while the gate ramps open.
+        self.wake_boost = MicBoostProcessor(boost_db=30)
         
         # Manual activation via stdin (click on orb)
         self.manual_activate_event = threading.Event()
@@ -733,10 +816,12 @@ class WakeWordService:
                     continue
                 
                 pcm = self.recorder.read()
-                # Apply 30dB boost for wake word processing
-                pcm_boosted = apply_mic_boost(pcm, 30).tolist()
+                # DC-block + 30dB + soft-clip (gate off to preserve onset)
+                pcm_boosted = self.wake_boost.process(
+                    np.array(pcm, dtype=np.int16), gate_enabled=False
+                ).tolist()
                 keyword_index = self.porcupine.process(pcm_boosted)
-                
+
                 if keyword_index >= 0:
                     self.emit("wake_word")
                     self.handle_wake_word()
