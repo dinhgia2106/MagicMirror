@@ -62,11 +62,23 @@ except ImportError:
 # It works cross-platform (Windows, Linux ARM, etc.) via Microsoft Azure API
 # No local ML models needed, avoiding "Illegal instruction" errors on Pi
 
-def apply_mic_boost(pcm, boost_db=30):
-    """Apply dB boost to PCM audio data"""
-    multiplier = 10 ** (boost_db / 20)
+def apply_mic_boost(pcm, boost_db=30, noise_gate_threshold=200):
+    """Apply noise gate and dB boost to PCM audio data"""
     audio_array = np.array(pcm, dtype=np.float32)
+    
+    # 1. Noise gate (lọc nhiễu nền): Giảm thiểu các âm thanh rất nhỏ (tiếng xì xèo)
+    # Các tín hiệu nhỏ hơn mức threshold (mặc định 200/32768) sẽ bị đè xuống gần 0
+    noise_mask = np.abs(audio_array) < noise_gate_threshold
+    audio_array[noise_mask] *= 0.05  # Giảm 95% âm lượng của nhiễu
+    
+    # Làm mượt (soft knee) ở đoạn giao giao giữa nhiễu và dải tiếng nói để tránh tiếng "bụp"
+    transition_mask = (np.abs(audio_array) >= noise_gate_threshold) & (np.abs(audio_array) < noise_gate_threshold * 2)
+    audio_array[transition_mask] *= 0.5
+    
+    # 2. Khuếch đại phần âm thanh thực sự
+    multiplier = 10 ** (boost_db / 20)
     audio_array = audio_array * multiplier
+    
     return np.clip(audio_array, -32768, 32767).astype(np.int16)
 
 class PvRecorderMicrophone:
