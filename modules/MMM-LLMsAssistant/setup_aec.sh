@@ -59,7 +59,7 @@ pactl load-module module-echo-cancel \
     source_master="${default_source}" \
     sink_name="${SINK_NAME}" \
     sink_master="${default_sink}" \
-    aec_args="analog_gain_control=0 digital_gain_control=1 noise_suppression=1 voice_detection=1" \
+    aec_args="analog_gain_control=0 digital_gain_control=0 noise_suppression=0 voice_detection=0 extended_filter=1" \
     use_master_format=1 >/dev/null
 
 # Make the AEC source/sink the system defaults so browser audio (music) flows
@@ -86,7 +86,7 @@ if ! grep -q "module-echo-cancel" "${PA_CONF}"; then
     cat >> "${PA_CONF}" <<EOF
 
 # === MMM-LLMsAssistant AEC (added by setup_aec.sh) ===
-load-module module-echo-cancel aec_method=webrtc source_name=${SOURCE_NAME} sink_name=${SINK_NAME} aec_args="analog_gain_control=0 digital_gain_control=1 noise_suppression=1 voice_detection=1" use_master_format=1
+load-module module-echo-cancel aec_method=webrtc source_name=${SOURCE_NAME} sink_name=${SINK_NAME} aec_args="analog_gain_control=0 digital_gain_control=0 noise_suppression=0 voice_detection=0 extended_filter=1" use_master_format=1
 set-default-source ${SOURCE_NAME}
 set-default-sink ${SINK_NAME}
 EOF
