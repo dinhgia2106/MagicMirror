@@ -175,7 +175,7 @@ class PvRecorderMicrophone:
         # === WebRTC VAD (used with energy for hybrid detection) ===
         self.use_webrtc_vad = WEBRTC_VAD_AVAILABLE
         if self.use_webrtc_vad:
-            self.vad = webrtcvad.Vad(3)  # Aggressiveness 3 = strictest, best noise rejection
+            self.vad = webrtcvad.Vad(2)  # Aggressiveness 2: balances rejection vs. far-field speech sensitivity
             self.vad_frame_ms = 30       # 30ms frames (webrtcvad accepts 10/20/30)
             self.vad_frame_samples = int(sample_rate * self.vad_frame_ms / 1000)  # 480
             self._vad_sample_buffer = np.array([], dtype=np.int16)
@@ -306,10 +306,11 @@ class PvRecorderMicrophone:
             threshold_from_std = median_energy + 2 * std_energy
             threshold_from_ratio = median_energy * self.dynamic_energy_ratio
             
-            # Use the higher of the two methods, with a minimum floor
+            # Use the higher of the two methods, with a minimum floor.
+            # Floor 40 (was 80) so far-field speech after AEC still passes the energy gate.
             self.energy_threshold = max(
                 max(threshold_from_std, threshold_from_ratio),
-                80  # Absolute minimum threshold
+                40
             )
 
             # Seed boost gate with the measured RAW ambient floor
