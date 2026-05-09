@@ -43,6 +43,30 @@ Add to `config/config.js`:
 2. Ask your question in Vietnamese
 3. Listen to the response
 
+## Acoustic Echo Cancellation (Raspberry Pi)
+
+So the wake word still triggers while music is playing through the same speaker, set up the system AEC once:
+
+```bash
+cd ~/MagicMirror/modules/MMM-LLMsAssistant
+chmod +x setup_aec.sh
+./setup_aec.sh
+```
+
+This loads PulseAudio/PipeWire's `module-echo-cancel` (WebRTC backend), routes the SoundCloud sink and the mic source through it, and persists the config across reboots. After running it, restart MagicMirror.
+
+If `PvRecorder` does not pick the AEC source automatically, list devices and pin it via config:
+
+```bash
+python wakeword_service.py --list-devices
+```
+
+Then in `config/config.js`:
+
+```javascript
+audioDeviceIndex: 2   // index of "mic_aec" from the list above
+```
+
 ## API Keys
 
 - **Picovoice**: [console.picovoice.ai](https://console.picovoice.ai/)

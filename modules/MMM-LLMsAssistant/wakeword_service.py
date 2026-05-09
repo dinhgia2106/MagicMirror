@@ -162,12 +162,13 @@ class PvRecorderMicrophone:
     Uses WebRTC VAD (like XiaoZhi-ESP32) for accurate speech detection,
     with energy-based fallback if webrtcvad is not installed.
     """
-    
-    def __init__(self, sample_rate=16000, frame_length=512):
+
+    def __init__(self, sample_rate=16000, frame_length=512, device_index=-1):
         self.sample_rate = sample_rate
         self.SAMPLE_WIDTH = 2  # 2 bytes for 16-bit
         self.SAMPLE_RATE = sample_rate
         self.frame_length = frame_length
+        self.device_index = device_index
         self.recorder = None
         self.on_speech_start = None  # Callback when speech starts
         
@@ -212,7 +213,7 @@ class PvRecorderMicrophone:
         if self.recorder is None:
             self.recorder = PvRecorder(
                 frame_length=self.frame_length,
-                device_index=-1
+                device_index=self.device_index
             )
         self.recorder.start()
     
@@ -559,13 +560,14 @@ class ConversationManager:
 
 
 class WakeWordService:
-    def __init__(self, access_key, ppn_path, llm_provider, llm_api_key, voice_id):
+    def __init__(self, access_key, ppn_path, llm_provider, llm_api_key, voice_id, audio_device_index=-1):
         self.access_key = access_key
         self.ppn_path = ppn_path
         self.llm_provider = llm_provider
         self.llm_api_key = llm_api_key
         self.voice_id = voice_id
-        
+        self.audio_device_index = audio_device_index
+
         self.porcupine = None
         self.recorder = None
         self.recognizer = sr.Recognizer()
@@ -768,17 +770,22 @@ class WakeWordService:
                 keyword_paths=[self.ppn_path]
             )
             
-            # Initialize recorder for wake word detection
+            # Initialize recorder for wake word detection.
+            # device_index=-1 = OS default. On Pi with module-echo-cancel set as
+            # default source (see setup_aec.sh), this is the AEC'd source — the
+            # wake word survives music playback through the same speaker.
+            print(f"Audio capture device index: {self.audio_device_index}", file=sys.stderr)
             self.recorder = PvRecorder(
                 frame_length=self.porcupine.frame_length,
-                device_index=-1  # Default device
+                device_index=self.audio_device_index
             )
             self.recorder.start()
-            
+
             # Initialize microphone with same frame length for consistency
             self.microphone = PvRecorderMicrophone(
                 sample_rate=self.porcupine.sample_rate,
-                frame_length=self.porcupine.frame_length
+                frame_length=self.porcupine.frame_length,
+                device_index=self.audio_device_index
             )
             # Set callback to emit listening_active when user starts speaking
             self.microphone.on_speech_start = lambda: self.emit("listening_active")
@@ -1962,19 +1969,41 @@ QUY TAC PHAN HOI:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--access-key", required=True, help="Picovoice access key")
-    parser.add_argument("--ppn-path", required=True, help="Path to .ppn wake word file")
+    parser.add_argument("--access-key", help="Picovoice access key")
+    parser.add_argument("--ppn-path", help="Path to .ppn wake word file")
     parser.add_argument("--llm-provider", default="gemini", help="LLM provider (gemini/openai)")
-    parser.add_argument("--llm-api-key", required=True, help="LLM API key")
+    parser.add_argument("--llm-api-key", help="LLM API key")
     parser.add_argument("--voice-id", default="vi-VN-NamMinhNeural", help="Edge TTS voice ID")
+    parser.add_argument("--audio-device-index", type=int, default=-1,
+                        help="PvRecorder device index (-1 = system default). Use --list-devices to find it.")
+    parser.add_argument("--list-devices", action="store_true",
+                        help="List available audio capture devices and exit.")
     args = parser.parse_args()
-    
+
+    if args.list_devices:
+        devices = PvRecorder.get_available_devices()
+        if not devices:
+            print("No capture devices found.")
+        else:
+            print("Available capture devices:")
+            for i, name in enumerate(devices):
+                print(f"  [{i}] {name}")
+            print("\nFor AEC, pick the index whose name matches your echo-cancel source")
+            print("(e.g. 'mic_aec' on PulseAudio, or the PipeWire echo-cancel virtual source).")
+        return
+
+    # Required args are only enforced for normal startup, not --list-devices.
+    missing = [n for n in ("access_key", "ppn_path", "llm_api_key") if not getattr(args, n)]
+    if missing:
+        parser.error("the following arguments are required: " + ", ".join("--" + m.replace("_", "-") for m in missing))
+
     service = WakeWordService(
         access_key=args.access_key,
         ppn_path=args.ppn_path,
         llm_provider=args.llm_provider,
         llm_api_key=args.llm_api_key,
-        voice_id=args.voice_id
+        voice_id=args.voice_id,
+        audio_device_index=args.audio_device_index
     )
     service.start()
 

@@ -122,9 +122,11 @@ module.exports = NodeHelper.create({
         console.log(`[MMM-LLMsAssistant] PPN path: ${ppnPath}`);
 
         // Build command with chcp for UTF-8 support on Windows
+        const audioDeviceIndex = Number.isInteger(this.config.audioDeviceIndex) ? this.config.audioDeviceIndex : -1;
+        const baseArgs = `--access-key "${this.config.picovoiceAccessKey}" --ppn-path "${ppnPath}" --llm-provider ${this.config.llmProvider} --llm-api-key "${this.config.llmApiKey}" --voice-id ${this.config.voiceId} --audio-device-index ${audioDeviceIndex}`;
         const command = process.platform === "win32"
-            ? `chcp 65001 >nul && set PYTHONIOENCODING=utf-8 && python "${pythonScript}" --access-key "${this.config.picovoiceAccessKey}" --ppn-path "${ppnPath}" --llm-provider ${this.config.llmProvider} --llm-api-key "${this.config.llmApiKey}" --voice-id ${this.config.voiceId}`
-            : `python "${pythonScript}" --access-key "${this.config.picovoiceAccessKey}" --ppn-path "${ppnPath}" --llm-provider ${this.config.llmProvider} --llm-api-key "${this.config.llmApiKey}" --voice-id ${this.config.voiceId}`;
+            ? `chcp 65001 >nul && set PYTHONIOENCODING=utf-8 && python "${pythonScript}" ${baseArgs}`
+            : `python "${pythonScript}" ${baseArgs}`;
 
         this.porcupineProcess = spawn(command, [], {
             shell: true,

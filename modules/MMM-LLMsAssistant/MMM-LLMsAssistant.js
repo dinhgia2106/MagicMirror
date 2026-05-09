@@ -7,6 +7,7 @@ Module.register("MMM-LLMsAssistant", {
         language: "vi-VN",
         voiceId: "vi-VN-NamMinhNeural",
         wakeTimeout: 10000,
+        audioDeviceIndex: -1,
         debug: false
     },
 

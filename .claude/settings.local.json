@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -c \"import ast; ast.parse\\(open\\('d:/MagicMirror/modules/MMM-LLMsAssistant/wakeword_service.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")"
+      "Bash(python -c \"import ast; ast.parse\\(open\\('d:/MagicMirror/modules/MMM-LLMsAssistant/wakeword_service.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(r'd:/MagicMirror/modules/MMM-LLMsAssistant/wakeword_service.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(node --check d:/MagicMirror/modules/MMM-LLMsAssistant/node_helper.js)"
     ]
   }
 }
