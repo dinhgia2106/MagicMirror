@@ -123,7 +123,9 @@ module.exports = NodeHelper.create({
 
         // Build command with chcp for UTF-8 support on Windows
         const audioDeviceIndex = Number.isInteger(this.config.audioDeviceIndex) ? this.config.audioDeviceIndex : -1;
-        const baseArgs = `--access-key "${this.config.picovoiceAccessKey}" --ppn-path "${ppnPath}" --llm-provider ${this.config.llmProvider} --llm-api-key "${this.config.llmApiKey}" --voice-id ${this.config.voiceId} --audio-device-index ${audioDeviceIndex}`;
+        const wakeSensitivity = typeof this.config.wakeSensitivity === "number" ? this.config.wakeSensitivity : 0.7;
+        const wakeBoostDb = typeof this.config.wakeBoostDb === "number" ? this.config.wakeBoostDb : 22;
+        const baseArgs = `--access-key "${this.config.picovoiceAccessKey}" --ppn-path "${ppnPath}" --llm-provider ${this.config.llmProvider} --llm-api-key "${this.config.llmApiKey}" --voice-id ${this.config.voiceId} --audio-device-index ${audioDeviceIndex} --wake-sensitivity ${wakeSensitivity} --wake-boost-db ${wakeBoostDb}`;
         const command = process.platform === "win32"
             ? `chcp 65001 >nul && set PYTHONIOENCODING=utf-8 && python "${pythonScript}" ${baseArgs}`
             : `python "${pythonScript}" ${baseArgs}`;

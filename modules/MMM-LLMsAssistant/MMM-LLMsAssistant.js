@@ -8,6 +8,8 @@ Module.register("MMM-LLMsAssistant", {
         voiceId: "vi-VN-NamMinhNeural",
         wakeTimeout: 10000,
         audioDeviceIndex: -1,
+        wakeSensitivity: 0.7,
+        wakeBoostDb: 22,
         debug: false
     },
 

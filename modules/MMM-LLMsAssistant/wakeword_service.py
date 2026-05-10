@@ -563,13 +563,16 @@ class ConversationManager:
 
 
 class WakeWordService:
-    def __init__(self, access_key, ppn_path, llm_provider, llm_api_key, voice_id, audio_device_index=-1):
+    def __init__(self, access_key, ppn_path, llm_provider, llm_api_key, voice_id,
+                 audio_device_index=-1, wake_sensitivity=0.7, wake_boost_db=22):
         self.access_key = access_key
         self.ppn_path = ppn_path
         self.llm_provider = llm_provider
         self.llm_api_key = llm_api_key
         self.voice_id = voice_id
         self.audio_device_index = audio_device_index
+        self.wake_sensitivity = float(wake_sensitivity)
+        self.wake_boost_db = float(wake_boost_db)
 
         self.porcupine = None
         self.recorder = None
@@ -579,7 +582,9 @@ class WakeWordService:
 
         # Boost for Porcupine — DC-block + gain + soft-clip, NO gate so the
         # 'h' onset of "hey lens" isn't chopped while the gate ramps open.
-        self.wake_boost = MicBoostProcessor(boost_db=30)
+        # 22dB default: enough to lift quiet I2S MEMS to detection range without
+        # tanh-clipping into distortion that throws off the wake-word model.
+        self.wake_boost = MicBoostProcessor(boost_db=self.wake_boost_db)
         
         # Manual activation via stdin (click on orb)
         self.manual_activate_event = threading.Event()
@@ -767,10 +772,14 @@ class WakeWordService:
     def start(self):
         """Start wake word detection"""
         try:
-            # Initialize Porcupine
+            # Initialize Porcupine. Sensitivity in [0,1]; higher = more permissive
+            # (better far-field recall, more false positives). 0.7 is Picovoice's
+            # recommended starting point for room-scale hands-free use.
+            print(f"Wake word sensitivity: {self.wake_sensitivity}", file=sys.stderr)
             self.porcupine = pvporcupine.create(
                 access_key=self.access_key,
-                keyword_paths=[self.ppn_path]
+                keyword_paths=[self.ppn_path],
+                sensitivities=[self.wake_sensitivity]
             )
             
             # Initialize recorder for wake word detection.
@@ -1981,6 +1990,10 @@ def main():
                         help="PvRecorder device index (-1 = system default). Use --list-devices to find it.")
     parser.add_argument("--list-devices", action="store_true",
                         help="List available audio capture devices and exit.")
+    parser.add_argument("--wake-sensitivity", type=float, default=0.7,
+                        help="Porcupine wake word sensitivity in [0,1]. Higher = more permissive.")
+    parser.add_argument("--wake-boost-db", type=float, default=22.0,
+                        help="dB of pre-Porcupine boost for quiet I2S mics. Lower if speech distorts.")
     args = parser.parse_args()
 
     if args.list_devices:
@@ -2006,7 +2019,9 @@ def main():
         llm_provider=args.llm_provider,
         llm_api_key=args.llm_api_key,
         voice_id=args.voice_id,
-        audio_device_index=args.audio_device_index
+        audio_device_index=args.audio_device_index,
+        wake_sensitivity=args.wake_sensitivity,
+        wake_boost_db=args.wake_boost_db
     )
     service.start()
 
