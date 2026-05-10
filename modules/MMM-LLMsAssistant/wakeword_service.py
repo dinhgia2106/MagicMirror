@@ -380,8 +380,10 @@ class PvRecorderMicrophone:
             try:
                 pcm = self.recorder.read()
                 audio_array = np.array(pcm, dtype=np.int16)
-                # Boosted copy for the STT buffer; detection still uses raw below
-                audio_array_boosted = self.boost.process(audio_array, gate_enabled=True)
+                # Boosted copy for the STT buffer; detection still uses raw below.
+                # Gate disabled: with AEC active, ambient is already clean, and gating
+                # mutes far-field/quiet speech that Google STT could otherwise transcribe.
+                audio_array_boosted = self.boost.process(audio_array, gate_enabled=False)
             except Exception:
                 continue
 
