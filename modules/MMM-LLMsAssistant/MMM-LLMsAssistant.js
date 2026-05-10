@@ -9,7 +9,7 @@ Module.register("MMM-LLMsAssistant", {
         wakeTimeout: 10000,
         audioDeviceIndex: -1,
         wakeSensitivity: 0.7,
-        wakeBoostDb: 22,
+        wakeBoostDb: 30,
         debug: false
     },
 

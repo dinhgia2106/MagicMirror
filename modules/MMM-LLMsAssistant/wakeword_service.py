@@ -564,7 +564,7 @@ class ConversationManager:
 
 class WakeWordService:
     def __init__(self, access_key, ppn_path, llm_provider, llm_api_key, voice_id,
-                 audio_device_index=-1, wake_sensitivity=0.7, wake_boost_db=22):
+                 audio_device_index=-1, wake_sensitivity=0.7, wake_boost_db=30):
         self.access_key = access_key
         self.ppn_path = ppn_path
         self.llm_provider = llm_provider
@@ -582,8 +582,8 @@ class WakeWordService:
 
         # Boost for Porcupine — DC-block + gain + soft-clip, NO gate so the
         # 'h' onset of "hey lens" isn't chopped while the gate ramps open.
-        # 22dB default: enough to lift quiet I2S MEMS to detection range without
-        # tanh-clipping into distortion that throws off the wake-word model.
+        # 30dB default: I2S MEMS + AEC source need this much gain to land in
+        # Porcupine's expected level range. Reduce only if speech audibly clips.
         self.wake_boost = MicBoostProcessor(boost_db=self.wake_boost_db)
         
         # Manual activation via stdin (click on orb)
@@ -1992,7 +1992,7 @@ def main():
                         help="List available audio capture devices and exit.")
     parser.add_argument("--wake-sensitivity", type=float, default=0.7,
                         help="Porcupine wake word sensitivity in [0,1]. Higher = more permissive.")
-    parser.add_argument("--wake-boost-db", type=float, default=22.0,
+    parser.add_argument("--wake-boost-db", type=float, default=30.0,
                         help="dB of pre-Porcupine boost for quiet I2S mics. Lower if speech distorts.")
     args = parser.parse_args()
 
